@@ -28,6 +28,8 @@ fn main() {
 
     let cli = CLI::parse();
 
+    info!("Enter main function");
+
     match cli.command {
         Commands::Run { command } => {
             run(command);

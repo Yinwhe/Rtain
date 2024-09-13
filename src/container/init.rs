@@ -2,6 +2,7 @@ use std::{ffi::CString, os::fd::AsRawFd, process::exit};
 
 use log::{error, info};
 use nix::{
+    libc::SIGCHLD,
     mount::{mount, MsFlags},
     sched::{clone, CloneFlags},
     sys::wait::waitpid,
@@ -18,6 +19,8 @@ pub fn run(command: String) {
             exit(-1);
         }
     };
+
+    info!("Child process created: {:?}", child);
 
     match waitpid(child, None) {
         Ok(status) => {
@@ -69,7 +72,7 @@ fn new_parent_process(tty: bool, command: &str) -> Result<Pid, nix::Error> {
             Box::new(|| child_func(tty, command)),
             &mut child_stack,
             flags,
-            None,
+            Some(SIGCHLD),
         )
     }?;
 
@@ -100,17 +103,22 @@ fn child_func(tty: bool, command: &str) -> isize {
         }
     }
 
-    let args = vec![
-        CString::new("init").unwrap(),
-        CString::new(command).unwrap(),
-    ];
+    println!("Child pid: {}", nix::unistd::getpid());
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    println!("2");
+    0
 
-    let prog = CString::new("/proc/self/exe").unwrap();
-    match execv(&prog, &args) {
-        Ok(_) => 0,
-        Err(err) => {
-            error!("Failed to execv: {:?}", err);
-            -1
-        }
-    }
+    // let args = vec![
+    //     CString::new("init").unwrap(),
+    //     CString::new(command).unwrap(),
+    // ];
+
+    // let prog = CString::new("/proc/self/exe").unwrap();
+    // match execv(&prog, &args) {
+    //     Ok(_) => 0,
+    //     Err(err) => {
+    //         error!("Failed to execv: {:?}", err);
+    //         -1
+    //     }
+    // }
 }
