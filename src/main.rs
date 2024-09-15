@@ -2,7 +2,7 @@ use std::env;
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
-use log::{error, info};
+use log::error;
 
 mod container;
 use container::{init, run};
@@ -17,9 +17,17 @@ struct CLI {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Init { command: String },
+    Init {
+        command: String,
+    },
 
-    Run { command: String },
+    Run {
+        command: String,
+
+        /// Memory limit for the container.
+        #[arg(short, long, value_parser(parse_memory_size))]
+        memory: Option<i64>,
+    },
 }
 
 fn main() {
@@ -31,15 +39,40 @@ fn main() {
     let cli = CLI::parse();
 
     match cli.command {
-        Commands::Run { command } => {
-            run(command);
+        Commands::Run { command, memory } => {
+            if let Err(e) = run(command, memory) {
+                error!("Failed to run container: {:?}", e);
+                exit(-1);
+            }
         }
         Commands::Init { command } => {
-            info!("Initializing container...");
             if let Err(e) = init(command) {
                 error!("Failed to initialize container: {:?}", e);
                 exit(-1);
             }
         }
     }
+}
+
+fn parse_memory_size(input: &str) -> Result<i64, String> {
+    let input = input.trim().to_lowercase();
+
+    let (number, multiplier): (&str, i64) = if input.ends_with("g") {
+        (&input[..input.len() - 1], 1024 * 1024 * 1024) // GB
+    } else if input.ends_with("m") {
+        (&input[..input.len() - 1], 1024 * 1024) // MB
+    } else if input.ends_with("k") {
+        (&input[..input.len() - 1], 1024) // KB
+    } else if input.chars().all(|c| c.is_digit(10)) {
+        (input.as_str(), 1) // default is B
+    } else {
+        return Err("Invalid memory size".into());
+    };
+
+    let number: i64 = match number.parse() {
+        Ok(n) => n,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    Ok(number * multiplier)
 }

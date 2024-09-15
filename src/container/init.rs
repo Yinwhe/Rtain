@@ -1,18 +1,28 @@
-use std::{ffi::CString, fs, os::fd::AsRawFd, path::Path, process::exit};
+use std::{
+    ffi::CString,
+    fs,
+    os::fd::{AsRawFd, OwnedFd},
+    path::Path,
+    process::exit,
+};
 
+use cgroups_rs::{cgroup_builder::CgroupBuilder, CgroupPid};
 use log::{error, info};
 use nix::{
     libc::SIGCHLD,
     mount::{mount, MsFlags},
     sched::{clone, CloneFlags},
     sys::wait::waitpid,
-    unistd::{execv, Pid},
+    unistd::{execv, pipe, read, write, Pid},
 };
 
 // When run a container command, it first creates a new process with new
 // namespaces and then runs the init command.
-pub fn run(command: String) {
-    let child = match new_parent_process(true, &command) {
+pub fn run(command: String, mem_limit: Option<i64>) -> Result<(), Box<dyn std::error::Error>> {
+    // Create pipes
+    let (read_fd, write_fd) = pipe()?;
+
+    let child = match new_container_process(true, &command, read_fd) {
         Ok(child) => child,
         Err(err) => {
             error!("Failed to create new namespace process: {:?}", err);
@@ -20,16 +30,36 @@ pub fn run(command: String) {
         }
     };
 
-    info!("Child process created: {:?}", child);
+    // setting up cgroups
+    let mut cg = None;
+    if let Some(mem_limit) = mem_limit {
+        let hier = cgroups_rs::hierarchies::auto();
+        let cg_inner = CgroupBuilder::new("rtain_cg")
+            .memory()
+            .kernel_memory_limit(mem_limit)
+            .memory_hard_limit(mem_limit)
+            .done()
+            .build(hier)?;
+
+        if let Err(e) = cg_inner.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
+            cg_inner.delete()?;
+            return Err(Box::new(e));
+        }
+
+        cg = Some(cg_inner);
+    }
+
+    write(write_fd, b"CONT")?;
 
     match waitpid(child, None) {
         Ok(status) => {
             info!("Child process exited with status: {:?}", status);
+            if let Some(cg) = cg {
+                cg.delete()?;
+            }
+            Ok(())
         }
-        Err(err) => {
-            error!("Failed to wait for child process: {:?}", err);
-            exit(-1);
-        }
+        Err(err) => Err(Box::new(err)),
     }
 }
 
@@ -67,7 +97,7 @@ pub fn init(command: String) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn new_parent_process(tty: bool, command: &str) -> Result<Pid, nix::Error> {
+fn new_container_process(tty: bool, command: &str, read_fd: OwnedFd) -> Result<Pid, nix::Error> {
     let flags = CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWNS
@@ -77,55 +107,58 @@ fn new_parent_process(tty: bool, command: &str) -> Result<Pid, nix::Error> {
     const STACK_SIZE: usize = 1 * 1024 * 1024;
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];
 
-    // clone new child process
-    let child_pid = unsafe {
-        clone(
-            Box::new(|| child_func(tty, command)),
-            &mut child_stack,
-            flags,
-            Some(SIGCHLD),
-        )
-    }?;
+    // Child function
+    let child_func = || {
+        // if enable tty, inherit the tty from parent
+        if tty {
+            let stdin_fd = std::io::stdin().as_raw_fd();
+            let stdout_fd = std::io::stdout().as_raw_fd();
+            let stderr_fd = std::io::stderr().as_raw_fd();
+
+            unsafe {
+                use nix::libc::dup2;
+                if dup2(stdin_fd, 0) == -1 {
+                    error!("Failed to dup2 stdin");
+                    return -1;
+                }
+                if dup2(stdout_fd, 1) == -1 {
+                    error!("Failed to dup2 stdout");
+                    return -1;
+                }
+                if dup2(stderr_fd, 2) == -1 {
+                    error!("Failed to dup2 stderr");
+                    return -1;
+                }
+            }
+        }
+
+        let args = vec![
+            CString::new("/proc/self/exe").unwrap(),
+            CString::new("init").unwrap(),
+            CString::new(command).unwrap(),
+        ];
+
+        // Wait for cgroups setting
+        let mut buffer = [0u8; 4];
+        read(read_fd.as_raw_fd(), &mut buffer).unwrap();
+
+        if &buffer != b"CONT" {
+            error!("Container received an unexpected signal: {:?}", buffer);
+            return -1;
+        }
+
+        let prog = CString::new("/proc/self/exe").unwrap();
+        match execv(&prog, &args) {
+            Ok(_) => 0,
+            Err(err) => {
+                error!("Failed to execv: {:?}", err);
+                -1
+            }
+        }
+    };
+
+    // This new process will run `child_func`
+    let child_pid = unsafe { clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) }?;
 
     Ok(child_pid)
-}
-
-fn child_func(tty: bool, command: &str) -> isize {
-    // if enable tty, inherit the tty from parent
-    if tty {
-        let stdin_fd = std::io::stdin().as_raw_fd();
-        let stdout_fd = std::io::stdout().as_raw_fd();
-        let stderr_fd = std::io::stderr().as_raw_fd();
-
-        unsafe {
-            use nix::libc::dup2;
-            if dup2(stdin_fd, 0) == -1 {
-                error!("Failed to dup2 stdin");
-                return -1;
-            }
-            if dup2(stdout_fd, 1) == -1 {
-                error!("Failed to dup2 stdout");
-                return -1;
-            }
-            if dup2(stderr_fd, 2) == -1 {
-                error!("Failed to dup2 stderr");
-                return -1;
-            }
-        }
-    }
-
-    let args = vec![
-        CString::new("/proc/self/exe").unwrap(),
-        CString::new("init").unwrap(),
-        CString::new(command).unwrap(),
-    ];
-
-    let prog = CString::new("/proc/self/exe").unwrap();
-    match execv(&prog, &args) {
-        Ok(_) => 0,
-        Err(err) => {
-            error!("Failed to execv: {:?}", err);
-            -1
-        }
-    }
 }
