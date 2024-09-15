@@ -1,4 +1,4 @@
-use std::{ffi::CString, os::fd::AsRawFd, process::exit};
+use std::{ffi::CString, fs, os::fd::AsRawFd, path::Path, process::exit};
 
 use log::{error, info};
 use nix::{
@@ -37,14 +37,25 @@ pub fn run(command: String) {
 pub fn init(command: String) -> Result<(), Box<dyn std::error::Error>> {
     info!("Init Command: {}", command);
 
-    let default_mount_flags = MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV;
+    // Make the mount namespace private
+    mount(
+        None::<&str>,
+        "/",
+        None::<&str>,
+        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        None::<&str>,
+    )?;
 
-    // Mount /proc
+    // Mount new proc fs
+    if !Path::new("/proc").exists() {
+        fs::create_dir("/proc")?;
+    }
+
     mount(
         Some("proc"),
         "/proc",
         Some("proc"),
-        default_mount_flags,
+        MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
         None::<&str>,
     )?;
 
@@ -63,7 +74,7 @@ fn new_parent_process(tty: bool, command: &str) -> Result<Pid, nix::Error> {
         | CloneFlags::CLONE_NEWNET
         | CloneFlags::CLONE_NEWIPC;
 
-    const STACK_SIZE: usize = 1024 * 1024;
+    const STACK_SIZE: usize = 1 * 1024 * 1024;
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];
 
     // clone new child process
@@ -103,22 +114,18 @@ fn child_func(tty: bool, command: &str) -> isize {
         }
     }
 
-    println!("Child pid: {}", nix::unistd::getpid());
-    std::thread::sleep(std::time::Duration::from_secs(10));
-    println!("2");
-    0
+    let args = vec![
+        CString::new("/proc/self/exe").unwrap(),
+        CString::new("init").unwrap(),
+        CString::new(command).unwrap(),
+    ];
 
-    // let args = vec![
-    //     CString::new("init").unwrap(),
-    //     CString::new(command).unwrap(),
-    // ];
-
-    // let prog = CString::new("/proc/self/exe").unwrap();
-    // match execv(&prog, &args) {
-    //     Ok(_) => 0,
-    //     Err(err) => {
-    //         error!("Failed to execv: {:?}", err);
-    //         -1
-    //     }
-    // }
+    let prog = CString::new("/proc/self/exe").unwrap();
+    match execv(&prog, &args) {
+        Ok(_) => 0,
+        Err(err) => {
+            error!("Failed to execv: {:?}", err);
+            -1
+        }
+    }
 }

@@ -26,9 +26,9 @@ fn main() {
     env::set_var("RUST_LOG", "info");
     env_logger::init();
 
-    let cli = CLI::parse();
+    // info!("main args: {:?}", env::args().collect::<Vec<String>>());
 
-    info!("Enter main function");
+    let cli = CLI::parse();
 
     match cli.command {
         Commands::Run { command } => {
