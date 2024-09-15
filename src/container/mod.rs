@@ -1,3 +1,3 @@
 mod init;
 
-pub use init::{init, run};
+pub use init::run;

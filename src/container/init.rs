@@ -18,7 +18,7 @@ use nix::{
 
 // When run a container command, it first creates a new process with new
 // namespaces and then runs the init command.
-pub fn run(command: String, mem_limit: Option<i64>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(mem_limit: Option<i64>, command: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     // Create pipes
     let (read_fd, write_fd) = pipe()?;
 
@@ -49,6 +49,7 @@ pub fn run(command: String, mem_limit: Option<i64>) -> Result<(), Box<dyn std::e
         cg = Some(cg_inner);
     }
 
+    // Let the init to continue.
     write(write_fd, b"CONT")?;
 
     match waitpid(child, None) {
@@ -64,9 +65,7 @@ pub fn run(command: String, mem_limit: Option<i64>) -> Result<(), Box<dyn std::e
 }
 
 // This is the first process in the new namespace.
-pub fn init(command: String) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Init Command: {}", command);
-
+fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     // Make the mount namespace private
     mount(
         None::<&str>,
@@ -89,15 +88,22 @@ pub fn init(command: String) -> Result<(), Box<dyn std::error::Error>> {
         None::<&str>,
     )?;
 
-    let command_cstr = CString::new(command)?;
-    let args_cstr: Vec<CString> = Vec::new();
+    let command_cstr = CString::new(command[0].clone())?;
+    let args_cstr: Vec<CString> = command
+        .iter()
+        .map(|arg| CString::new(arg.clone()).unwrap())
+        .collect();
 
     execv(&command_cstr, &args_cstr)?;
 
     Ok(())
 }
 
-fn new_container_process(tty: bool, command: &str, read_fd: OwnedFd) -> Result<Pid, nix::Error> {
+fn new_container_process(
+    tty: bool,
+    command: &Vec<String>,
+    read_fd: OwnedFd,
+) -> Result<Pid, nix::Error> {
     let flags = CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWNS
@@ -132,12 +138,6 @@ fn new_container_process(tty: bool, command: &str, read_fd: OwnedFd) -> Result<P
             }
         }
 
-        let args = vec![
-            CString::new("/proc/self/exe").unwrap(),
-            CString::new("init").unwrap(),
-            CString::new(command).unwrap(),
-        ];
-
         // Wait for cgroups setting
         let mut buffer = [0u8; 4];
         read(read_fd.as_raw_fd(), &mut buffer).unwrap();
@@ -147,14 +147,11 @@ fn new_container_process(tty: bool, command: &str, read_fd: OwnedFd) -> Result<P
             return -1;
         }
 
-        let prog = CString::new("/proc/self/exe").unwrap();
-        match execv(&prog, &args) {
-            Ok(_) => 0,
-            Err(err) => {
-                error!("Failed to execv: {:?}", err);
-                -1
-            }
+        if let Err(e) = do_init(command) {
+            error!("Failed to initialize container: {:?}", e);
+            return -1;
         }
+        return 0;
     };
 
     // This new process will run `child_func`

@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use log::error;
 
 mod container;
-use container::{init, run};
+use container::run;
 
 #[derive(Parser, Debug)]
 #[command(name = "rtain")]
@@ -17,16 +17,13 @@ struct CLI {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Init {
-        command: String,
-    },
-
     Run {
-        command: String,
-
         /// Memory limit for the container.
         #[arg(short, long, value_parser(parse_memory_size))]
         memory: Option<i64>,
+
+        /// Command to run in the container.
+        command: Vec<String>,
     },
 }
 
@@ -39,15 +36,9 @@ fn main() {
     let cli = CLI::parse();
 
     match cli.command {
-        Commands::Run { command, memory } => {
-            if let Err(e) = run(command, memory) {
+        Commands::Run { memory, command } => {
+            if let Err(e) = run(memory, command) {
                 error!("Failed to run container: {:?}", e);
-                exit(-1);
-            }
-        }
-        Commands::Init { command } => {
-            if let Err(e) = init(command) {
-                error!("Failed to initialize container: {:?}", e);
                 exit(-1);
             }
         }
