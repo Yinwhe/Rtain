@@ -23,6 +23,7 @@ enum Commands {
         memory: Option<i64>,
 
         /// Command to run in the container.
+        #[arg(allow_hyphen_values = true)] 
         command: Vec<String>,
     },
 }
@@ -30,8 +31,6 @@ enum Commands {
 fn main() {
     env::set_var("RUST_LOG", "info");
     env_logger::init();
-
-    // info!("main args: {:?}", env::args().collect::<Vec<String>>());
 
     let cli = CLI::parse();
 
