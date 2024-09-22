@@ -44,6 +44,7 @@ fn main() {
     }
 }
 
+/// Parse a memory size string into bytes.
 fn parse_memory_size(input: &str) -> Result<i64, String> {
     let input = input.trim().to_lowercase();
 

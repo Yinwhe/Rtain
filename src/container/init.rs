@@ -7,14 +7,16 @@ use std::{
 };
 
 use cgroups_rs::{cgroup_builder::CgroupBuilder, CgroupPid};
-use log::{error, info};
+use log::{debug, error, info};
 use nix::{
     libc::SIGCHLD,
-    mount::{mount, MsFlags},
+    mount::{mount, umount2, MntFlags, MsFlags},
     sched::{clone, CloneFlags},
     sys::wait::waitpid,
-    unistd::{execv, pipe, read, write, Pid},
+    unistd::{chdir, execvp, pipe, pivot_root, read, write, Pid},
 };
+
+use crate::container::image::{delete_workspace, new_workspace};
 
 // When run a container command, it first creates a new process with new
 // namespaces and then runs the init command.
@@ -58,6 +60,8 @@ pub fn run(mem_limit: Option<i64>, command: Vec<String>) -> Result<(), Box<dyn s
             if let Some(cg) = cg {
                 cg.delete()?;
             }
+            delete_workspace("/tmp/rtain", "/tmp/rtain/mnt")?;
+
             Ok(())
         }
         Err(err) => Err(Box::new(err)),
@@ -66,27 +70,7 @@ pub fn run(mem_limit: Option<i64>, command: Vec<String>) -> Result<(), Box<dyn s
 
 // This is the first process in the new namespace.
 fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
-    // Make the mount namespace private
-    mount(
-        None::<&str>,
-        "/",
-        None::<&str>,
-        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
-        None::<&str>,
-    )?;
-
-    // Mount new proc fs
-    if !Path::new("/proc").exists() {
-        fs::create_dir("/proc")?;
-    }
-
-    mount(
-        Some("proc"),
-        "/proc",
-        Some("proc"),
-        MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
-        None::<&str>,
-    )?;
+    setup_mount()?;
 
     let command_cstr = CString::new(command[0].clone())?;
     let args_cstr: Vec<CString> = command
@@ -94,7 +78,8 @@ fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         .map(|arg| CString::new(arg.clone()).unwrap())
         .collect();
 
-    execv(&command_cstr, &args_cstr)?;
+    info!("Ready to run command: {:?}", command);
+    execvp(&command_cstr, &args_cstr)?;
 
     Ok(())
 }
@@ -103,7 +88,7 @@ fn new_container_process(
     tty: bool,
     command: &Vec<String>,
     read_fd: OwnedFd,
-) -> Result<Pid, nix::Error> {
+) -> Result<Pid, Box<dyn std::error::Error>> {
     let flags = CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWNS
@@ -157,5 +142,69 @@ fn new_container_process(
     // This new process will run `child_func`
     let child_pid = unsafe { clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) }?;
 
+    // Here we create the new rootfs
+    new_workspace("/tmp/rtain", "/tmp/rtain/mnt")?;
+
     Ok(child_pid)
+}
+
+fn setup_mount() -> Result<(), Box<dyn std::error::Error>> {
+    // Make the mount namespace private
+    mount(
+        None::<&str>,
+        "/",
+        None::<&str>,
+        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        None::<&str>,
+    )?;
+
+    // Switch to new root
+    switch_root("/tmp/rtain/mnt")?;
+
+    // Mount new proc fs
+    if !Path::new("/proc").exists() {
+        fs::create_dir("/proc")?;
+    }
+
+    mount(
+        Some("proc"),
+        "/proc",
+        Some("proc"),
+        MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+        None::<&str>,
+    )?;
+
+    Ok(())
+}
+
+fn switch_root(root: &str) -> Result<(), Box<dyn std::error::Error>> {
+    debug!("Switch root to: {}", root);
+
+    // Mount new root to cover the old root
+    mount(
+        Some(root),
+        root,
+        None::<&str>,
+        MsFlags::MS_BIND | MsFlags::MS_REC,
+        None::<&str>,
+    )?;
+
+    // Create a new directory to save the old root
+    let pivot_dir = format!("{}/.pivot_root", root);
+    fs::create_dir_all(&pivot_dir)?;
+
+    // Execute `pivot_root` to switch the new root to `root`
+    pivot_root(root, pivot_dir.as_str())?;
+
+    // To the new working directory
+    chdir("/")?;
+
+    // Unmount the old root
+    let pivot_dir_old = "/.pivot_root";
+    umount2(pivot_dir_old, MntFlags::MNT_DETACH)?;
+
+    // Remove the old root
+    fs::remove_dir_all(pivot_dir_old)?;
+
+    Ok(())
 }
