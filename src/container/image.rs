@@ -2,15 +2,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use log::debug;
+use log::{debug, info};
+use nix::mount::{mount, umount2, MntFlags, MsFlags};
 
-pub fn new_workspace(root_path: &str, mnt_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn new_workspace(
+    root_path: &str,
+    mnt_path: &str,
+    volume: &Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let root_path = Path::new(root_path);
     let mnt_path = Path::new(mnt_path);
 
     create_ro_layer(&root_path)?;
     create_rw_layer(&root_path)?;
     create_mount_point(&root_path, &mnt_path)?;
+
+    if let Some(vol) = volume {
+        let sv = vol.split(":").collect::<Vec<&str>>();
+        if sv.len() == 2 && !sv[0].is_empty() && !sv[1].is_empty() {
+            mount_volume(&mnt_path, sv)?;
+        } else {
+            return Err(format!("Invalid volume: {}", vol).into());
+        }
+    }
+
     Ok(())
 }
 
@@ -77,7 +92,7 @@ fn create_mount_point(root_path: &Path, mnt_path: &Path) -> Result<(), Box<dyn s
 
     debug!("Mounting overlay filesystem to {:?}", mnt_path);
 
-    Command::new("mount")
+    let status = Command::new("mount")
         .arg("-t")
         .arg("overlay")
         .arg("overlay")
@@ -86,12 +101,31 @@ fn create_mount_point(root_path: &Path, mnt_path: &Path) -> Result<(), Box<dyn s
         .arg(mnt_path)
         .status()?;
 
+    if !status.success() {
+        return Err("Failed to mount overlay filesystem".into());
+    }
+
     Ok(())
 }
 
-pub fn delete_workspace(root_url: &str, mnt_url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    delete_mount_point(Path::new(mnt_url))?;
-    delete_write_layer(Path::new(root_url))?;
+pub fn delete_workspace(
+    root_path: &str,
+    mnt_path: &str,
+    volume: &Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root_path = Path::new(root_path);
+    let mnt_path = Path::new(mnt_path);
+
+    if let Some(vol) = volume {
+        let sv = vol.split(":").collect::<Vec<&str>>();
+
+        assert!(sv.len() == 2 && !sv[0].is_empty() && !sv[1].is_empty());
+        umount_volume(mnt_path, sv)?;
+    }
+
+    delete_mount_point(mnt_path)?;
+    delete_write_layer(root_path)?;
+
     Ok(())
 }
 
@@ -114,6 +148,48 @@ fn delete_write_layer(root_path: &Path) -> Result<(), Box<dyn std::error::Error>
 
     debug!("Deleted work dir at {:?}", work_dir);
     fs::remove_dir_all(&work_dir)?;
+
+    Ok(())
+}
+
+fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Mounting volume: {:?}", volume_path);
+
+    let hostv = Path::new(volume_path[0]);
+    let contv = mnt_path.join(volume_path[1].strip_prefix("/").unwrap());
+
+    debug!("Host volume: {:?}", hostv);
+    debug!("Container volume: {:?}", contv);
+
+    if !hostv.exists() {
+        fs::create_dir_all(hostv)?;
+    }
+
+    if !contv.exists() {
+        fs::create_dir_all(&contv)?;
+    }
+
+    mount(
+        Some(hostv),
+        &contv,
+        None::<&str>,
+        MsFlags::MS_BIND,
+        None::<&str>,
+    )?;
+
+    Ok(())
+}
+
+fn umount_volume(
+    mnt_path: &Path,
+    volume_path: Vec<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Unmounting volume: {:?}", volume_path);
+
+    let contv = mnt_path.join(volume_path[1].strip_prefix("/").unwrap());
+    debug!("Container volume: {:?}", contv);
+
+    umount2(&contv, MntFlags::MNT_DETACH)?;
 
     Ok(())
 }

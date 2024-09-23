@@ -18,9 +18,13 @@ use nix::{
 
 use crate::container::image::{delete_workspace, new_workspace};
 
-// When run a container command, it first creates a new process with new
-// namespaces and then runs the init command.
-pub fn run(mem_limit: Option<i64>, command: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+/// When run a container command, it first creates a new process with new
+/// namespaces and then runs the init command.
+pub fn run(
+    mem_limit: Option<i64>,
+    volume: Option<String>,
+    command: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Create pipes
     let (read_fd, write_fd) = pipe()?;
 
@@ -51,6 +55,9 @@ pub fn run(mem_limit: Option<i64>, command: Vec<String>) -> Result<(), Box<dyn s
         cg = Some(cg_inner);
     }
 
+    // Here we create the new rootfs
+    new_workspace("/tmp/rtain", "/tmp/rtain/mnt",&volume)?;
+
     // Let the init to continue.
     write(write_fd, b"CONT")?;
 
@@ -60,7 +67,7 @@ pub fn run(mem_limit: Option<i64>, command: Vec<String>) -> Result<(), Box<dyn s
             if let Some(cg) = cg {
                 cg.delete()?;
             }
-            delete_workspace("/tmp/rtain", "/tmp/rtain/mnt")?;
+            delete_workspace("/tmp/rtain", "/tmp/rtain/mnt", &volume)?;
 
             Ok(())
         }
@@ -68,7 +75,7 @@ pub fn run(mem_limit: Option<i64>, command: Vec<String>) -> Result<(), Box<dyn s
     }
 }
 
-// This is the first process in the new namespace.
+/// This is the first process in the new namespace.
 fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     setup_mount()?;
 
@@ -84,6 +91,8 @@ fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Create a new process with new namespaces.
+/// This process will then do the initialization.
 fn new_container_process(
     tty: bool,
     command: &Vec<String>,
@@ -141,9 +150,6 @@ fn new_container_process(
 
     // This new process will run `child_func`
     let child_pid = unsafe { clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) }?;
-
-    // Here we create the new rootfs
-    new_workspace("/tmp/rtain", "/tmp/rtain/mnt")?;
 
     Ok(child_pid)
 }

@@ -22,21 +22,29 @@ enum Commands {
         #[arg(short, long, value_parser(parse_memory_size))]
         memory: Option<i64>,
 
+        /// Stablize using the volume mount.
+        #[arg(short, long)]
+        volume: Option<String>,
+
         /// Command to run in the container.
-        #[arg(allow_hyphen_values = true)] 
+        #[arg(allow_hyphen_values = true)]
         command: Vec<String>,
     },
 }
 
 fn main() {
-    env::set_var("RUST_LOG", "info");
+    env::set_var("RUST_LOG", "debug");
     env_logger::init();
 
     let cli = CLI::parse();
 
     match cli.command {
-        Commands::Run { memory, command } => {
-            if let Err(e) = run(memory, command) {
+        Commands::Run {
+            memory,
+            volume,
+            command,
+        } => {
+            if let Err(e) = run(memory, volume, command) {
                 error!("Failed to run container: {:?}", e);
                 exit(-1);
             }
