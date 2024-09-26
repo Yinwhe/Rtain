@@ -6,7 +6,7 @@ use std::{
     process::exit,
 };
 
-use cgroups_rs::{cgroup_builder::CgroupBuilder, CgroupPid};
+use cgroups_rs::{cgroup_builder::CgroupBuilder, Cgroup, CgroupPid};
 use log::{debug, error, info};
 use nix::{
     libc::SIGCHLD,
@@ -15,20 +15,27 @@ use nix::{
     sys::wait::waitpid,
     unistd::{chdir, execvp, pipe, pivot_root, read, write, Pid},
 };
+use rand::{thread_rng, Rng};
 
-use crate::container::image::{delete_workspace, new_workspace};
+use crate::{
+    container::image::{delete_workspace, new_workspace},
+    RunArgs,
+};
 
 /// When run a container command, it first creates a new process with new
 /// namespaces and then runs the init command.
-pub fn run(
-    mem_limit: Option<i64>,
-    volume: Option<String>,
-    command: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(run_args: RunArgs) {
     // Create pipes
-    let (read_fd, write_fd) = pipe()?;
+    let (read_fd, write_fd) = match pipe() {
+        Ok((read_fd, write_fd)) => (read_fd, write_fd),
+        Err(err) => {
+            error!("Failed to create pipe: {:?}", err);
+            exit(-1);
+        }
+    };
 
-    let child = match new_container_process(true, &command, read_fd) {
+    // Create a new process with new namespaces
+    let child = match new_container_process(&run_args.command, read_fd) {
         Ok(child) => child,
         Err(err) => {
             error!("Failed to create new namespace process: {:?}", err);
@@ -36,43 +43,60 @@ pub fn run(
         }
     };
 
-    // setting up cgroups
-    let mut cg = None;
-    if let Some(mem_limit) = mem_limit {
-        let hier = cgroups_rs::hierarchies::auto();
-        let cg_inner = CgroupBuilder::new("rtain_cg")
-            .memory()
-            .kernel_memory_limit(mem_limit)
-            .memory_hard_limit(mem_limit)
-            .done()
-            .build(hier)?;
+    // Generate name-id.
+    let name_id = format!("rtain-{}", random_id());
 
-        if let Err(e) = cg_inner.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
-            cg_inner.delete()?;
-            return Err(Box::new(e));
+    // Setting up cgroups
+    let cg = match setup_cgroup(&name_id, child) {
+        Ok(cg) => cg,
+        Err(e) => {
+            error!("Failed to setup cgroup: {:?}", e);
+
+            // Clean up the child.
+            write(write_fd, b"EXIT").unwrap();
+            let _ = waitpid(child, None);
+
+            exit(-1);
         }
-
-        cg = Some(cg_inner);
-    }
+    };
 
     // Here we create the new rootfs
-    new_workspace("/tmp/rtain", "/tmp/rtain/mnt",&volume)?;
+    if let Err(e) = new_workspace("/tmp/rtain", "/tmp/rtain/mnt", &run_args.volume) {
+        error!("Failed to create new workspace: {:?}", e);
+
+        // Clean up...
+        write(write_fd, b"EXIT").unwrap();
+        let _ = waitpid(child, None);
+        let _ = cg.delete();
+
+        exit(-1);
+    }
 
     // Let the init to continue.
-    write(write_fd, b"CONT")?;
+    write(write_fd, b"CONT").unwrap();
 
-    match waitpid(child, None) {
-        Ok(status) => {
-            info!("Child process exited with status: {:?}", status);
-            if let Some(cg) = cg {
-                cg.delete()?;
+    // Form the container record.
+    // let cr = ContainerRecord::new(
+    //     &name_id[..5],
+    //     &name_id[5..],
+    //     child.as_raw(),
+    //     &run_args.command.join(" "),
+    // );
+
+    if !run_args.detach {
+        match waitpid(child, None) {
+            Ok(status) => {
+                info!("Child process exited with status: {:?}", status);
+
+                let _ = cg.delete();
+                let _ = delete_workspace("/tmp/rtain", "/tmp/rtain/mnt", &run_args.volume);
             }
-            delete_workspace("/tmp/rtain", "/tmp/rtain/mnt", &volume)?;
-
-            Ok(())
+            Err(err) => {
+                error!("Failed to wait for child process: {:?}", err);
+            }
         }
-        Err(err) => Err(Box::new(err)),
     }
+    // Or detach from its child.
 }
 
 /// This is the first process in the new namespace.
@@ -94,7 +118,6 @@ fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 /// Create a new process with new namespaces.
 /// This process will then do the initialization.
 fn new_container_process(
-    tty: bool,
     command: &Vec<String>,
     read_fd: OwnedFd,
 ) -> Result<Pid, Box<dyn std::error::Error>> {
@@ -109,42 +132,24 @@ fn new_container_process(
 
     // Child function
     let child_func = || {
-        // if enable tty, inherit the tty from parent
-        if tty {
-            let stdin_fd = std::io::stdin().as_raw_fd();
-            let stdout_fd = std::io::stdout().as_raw_fd();
-            let stderr_fd = std::io::stderr().as_raw_fd();
-
-            unsafe {
-                use nix::libc::dup2;
-                if dup2(stdin_fd, 0) == -1 {
-                    error!("Failed to dup2 stdin");
-                    return -1;
-                }
-                if dup2(stdout_fd, 1) == -1 {
-                    error!("Failed to dup2 stdout");
-                    return -1;
-                }
-                if dup2(stderr_fd, 2) == -1 {
-                    error!("Failed to dup2 stderr");
-                    return -1;
-                }
-            }
-        }
-
         // Wait for cgroups setting
         let mut buffer = [0u8; 4];
         read(read_fd.as_raw_fd(), &mut buffer).unwrap();
 
-        if &buffer != b"CONT" {
-            error!("Container received an unexpected signal: {:?}", buffer);
-            return -1;
+        match &buffer {
+            b"CONT" => (),
+            b"EXIT" => return 0,
+            _ => {
+                error!("Container received an unexpected signal: {:?}", buffer);
+                return -1;
+            }
         }
 
         if let Err(e) = do_init(command) {
             error!("Failed to initialize container: {:?}", e);
             return -1;
         }
+
         return 0;
     };
 
@@ -213,4 +218,30 @@ fn switch_root(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     fs::remove_dir_all(pivot_dir_old)?;
 
     Ok(())
+}
+
+fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, Box<dyn std::error::Error>> {
+    let hier = cgroups_rs::hierarchies::auto();
+    let cg = match CgroupBuilder::new(&cg_name).build(hier) {
+        Ok(cg) => cg,
+        Err(e) => return Err(Box::new(e)),
+    };
+
+    match cg.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
+        Ok(_) => Ok(cg),
+        Err(e) => {
+            cg.delete()?;
+            Err(Box::new(e))
+        }
+    }
+}
+
+fn random_id() -> String {
+    let mut rng = thread_rng();
+    let random_bytes: [u8; 16] = rng.gen();
+
+    random_bytes
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect()
 }

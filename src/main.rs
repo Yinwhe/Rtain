@@ -1,11 +1,11 @@
 use std::env;
-use std::process::exit;
 
-use clap::{Parser, Subcommand};
-use log::error;
+use clap::{Args, Parser, Subcommand};
 
 mod container;
 use container::run;
+
+mod records;
 
 #[derive(Parser, Debug)]
 #[command(name = "rtain")]
@@ -17,19 +17,26 @@ struct CLI {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Run {
-        /// Memory limit for the container.
-        #[arg(short, long, value_parser(parse_memory_size))]
-        memory: Option<i64>,
+    Run(RunArgs),
+}
 
-        /// Stablize using the volume mount.
-        #[arg(short, long)]
-        volume: Option<String>,
+#[derive(Args, Debug)]
+struct RunArgs {
+    /// Memory limit for the container.
+    #[arg(short, long, value_parser(parse_memory_size))]
+    memory: Option<i64>,
 
-        /// Command to run in the container.
-        #[arg(allow_hyphen_values = true)]
-        command: Vec<String>,
-    },
+    /// Stabilize using the volume mount.
+    #[arg(short, long)]
+    volume: Option<String>,
+
+    /// Detach the container.
+    #[arg(short, long)]
+    detach: bool,
+
+    /// Command to run in the container.
+    #[arg(allow_hyphen_values = true)]
+    command: Vec<String>,
 }
 
 fn main() {
@@ -39,16 +46,7 @@ fn main() {
     let cli = CLI::parse();
 
     match cli.command {
-        Commands::Run {
-            memory,
-            volume,
-            command,
-        } => {
-            if let Err(e) = run(memory, volume, command) {
-                error!("Failed to run container: {:?}", e);
-                exit(-1);
-            }
-        }
+        Commands::Run(run_args) => run(run_args),
     }
 }
 
