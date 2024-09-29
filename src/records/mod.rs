@@ -36,10 +36,11 @@ impl ContainerManager {
         }
     }
 
-    pub fn register(&mut self, record: ContainerRecord) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn register(&mut self, record: &ContainerRecord) -> Result<(), Box<dyn std::error::Error>> {
         self.records.insert(record.id.clone());
 
-        record.save(&self.root_path)
+        record.save(&self.root_path)?;
+        self.save()
     }
 
     pub fn deregister(&mut self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -48,7 +49,7 @@ impl ContainerManager {
         let record_path = self.root_path.join(format!("{}.json", id));
         std::fs::remove_file(record_path)?;
 
-        Ok(())
+        self.save()
     }
 
     fn load() -> Result<Self, Box<dyn std::error::Error>> {
@@ -77,6 +78,16 @@ impl Drop for ContainerManager {
 }
 
 impl ContainerRecord {
+    pub fn new(name: &str, id: &str, pid: i32, command: &str) -> Self {
+        ContainerRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            pid,
+            command: command.to_string(),
+            status: "unimplemented".to_string(),
+        }
+    }
+
     pub(in crate::records) fn save(
         &self,
         root_path: &PathBuf,

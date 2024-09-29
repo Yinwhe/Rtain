@@ -19,7 +19,8 @@ use rand::{thread_rng, Rng};
 
 use crate::{
     container::image::{delete_workspace, new_workspace},
-    RunArgs,
+    records::ContainerRecord,
+    RunArgs, RECORD_MANAGER,
 };
 
 /// When run a container command, it first creates a new process with new
@@ -34,17 +35,19 @@ pub fn run(run_args: RunArgs) {
         }
     };
 
+    // Generate name-id.
+    let name_id = format!("rtain-{}", random_id());
+    let root_path = format!("/tmp/rtain/{}", name_id);
+    let mnt_path = format!("/tmp/rtain/{}/mnt", name_id);
+
     // Create a new process with new namespaces
-    let child = match new_container_process(&run_args.command, read_fd) {
+    let child = match new_container_process(&mnt_path, &run_args.command, read_fd) {
         Ok(child) => child,
         Err(err) => {
             error!("Failed to create new namespace process: {:?}", err);
             exit(-1);
         }
     };
-
-    // Generate name-id.
-    let name_id = format!("rtain-{}", random_id());
 
     // Setting up cgroups
     let cg = match setup_cgroup(&name_id, child) {
@@ -53,7 +56,7 @@ pub fn run(run_args: RunArgs) {
             error!("Failed to setup cgroup: {:?}", e);
 
             // Clean up the child.
-            write(write_fd, b"EXIT").unwrap();
+            write(&write_fd, b"EXIT").unwrap();
             let _ = waitpid(child, None);
 
             exit(-1);
@@ -61,27 +64,38 @@ pub fn run(run_args: RunArgs) {
     };
 
     // Here we create the new rootfs
-    if let Err(e) = new_workspace("/tmp/rtain", "/tmp/rtain/mnt", &run_args.volume) {
+    if let Err(e) = new_workspace(&root_path, &mnt_path, &run_args.volume) {
         error!("Failed to create new workspace: {:?}", e);
 
         // Clean up...
-        write(write_fd, b"EXIT").unwrap();
+        write(&write_fd, b"EXIT").unwrap();
         let _ = waitpid(child, None);
         let _ = cg.delete();
 
         exit(-1);
     }
 
-    // Let the init to continue.
-    write(write_fd, b"CONT").unwrap();
-
     // Form the container record.
-    // let cr = ContainerRecord::new(
-    //     &name_id[..5],
-    //     &name_id[5..],
-    //     child.as_raw(),
-    //     &run_args.command.join(" "),
-    // );
+    let cr = ContainerRecord::new(
+        &name_id[..5],
+        &name_id[6..],
+        child.as_raw(),
+        &run_args.command.join(" "),
+    );
+    if let Err(e) = RECORD_MANAGER.lock().unwrap().register(&cr) {
+        error!("Failed to register container record: {:?}", e);
+
+        // Clean up...
+        write(&write_fd, b"EXIT").unwrap();
+        let _ = waitpid(child, None);
+        let _ = cg.delete();
+        let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume);
+
+        exit(-1);
+    }
+
+    // Let the init to continue.
+    write(&write_fd, b"CONT").unwrap();
 
     if !run_args.detach {
         match waitpid(child, None) {
@@ -89,7 +103,8 @@ pub fn run(run_args: RunArgs) {
                 info!("Child process exited with status: {:?}", status);
 
                 let _ = cg.delete();
-                let _ = delete_workspace("/tmp/rtain", "/tmp/rtain/mnt", &run_args.volume);
+                let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume);
+                let _ = RECORD_MANAGER.lock().unwrap().deregister(&name_id);
             }
             Err(err) => {
                 error!("Failed to wait for child process: {:?}", err);
@@ -100,8 +115,8 @@ pub fn run(run_args: RunArgs) {
 }
 
 /// This is the first process in the new namespace.
-fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
-    setup_mount()?;
+fn do_init(root: &str, command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    setup_mount(root)?;
 
     let command_cstr = CString::new(command[0].clone())?;
     let args_cstr: Vec<CString> = command
@@ -115,9 +130,26 @@ fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// /// When a child container ends, call this function to do the cleans.
+// fn do_clean(cr: ContainerRecord) -> Result<(), Box<dyn std::error::Error>> {
+//     let name_id = format!("rtain-{}", cr.id);
+//     let root_path = format!("/tmp/rtain/{}", name_id);
+//     let mnt_path = format!("/tmp/rtain/{}/mnt", name_id);
+
+//     let hier = cgroups_rs::hierarchies::auto();
+//     let cg = Cgroup::load(hier, &name_id);
+
+//     let _ = cg.delete();
+//     let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume);
+//     let _ = RECORD_MANAGER.lock().unwrap().deregister(&name_id);
+
+//     Ok(())
+// }
+
 /// Create a new process with new namespaces.
 /// This process will then do the initialization.
 fn new_container_process(
+    workspace_path: &str,
     command: &Vec<String>,
     read_fd: OwnedFd,
 ) -> Result<Pid, Box<dyn std::error::Error>> {
@@ -145,7 +177,7 @@ fn new_container_process(
             }
         }
 
-        if let Err(e) = do_init(command) {
+        if let Err(e) = do_init(workspace_path, command) {
             error!("Failed to initialize container: {:?}", e);
             return -1;
         }
@@ -159,7 +191,7 @@ fn new_container_process(
     Ok(child_pid)
 }
 
-fn setup_mount() -> Result<(), Box<dyn std::error::Error>> {
+fn setup_mount(workspace_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Make the mount namespace private
     mount(
         None::<&str>,
@@ -170,7 +202,7 @@ fn setup_mount() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Switch to new root
-    switch_root("/tmp/rtain/mnt")?;
+    switch_root(workspace_path)?;
 
     // Mount new proc fs
     if !Path::new("/proc").exists() {

@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, sync::Mutex};
 
 use clap::{Args, Parser, Subcommand};
 
@@ -6,6 +6,11 @@ mod container;
 use container::run;
 
 mod records;
+use records::ContainerManager;
+
+lazy_static::lazy_static! {
+    pub static ref RECORD_MANAGER: Mutex<ContainerManager> = Mutex::new(ContainerManager::init().unwrap());
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "rtain")]
