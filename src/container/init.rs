@@ -19,7 +19,7 @@ use rand::{thread_rng, Rng};
 
 use crate::{
     container::image::{delete_workspace, new_workspace},
-    records::ContainerRecord,
+    records::{ContainerRecord, ContainerStatus},
     RunArgs, RECORD_MANAGER,
 };
 
@@ -81,6 +81,7 @@ pub fn run(run_args: RunArgs) {
         &name_id[6..],
         child.as_raw(),
         &run_args.command.join(" "),
+        ContainerStatus::Running,
     );
     if let Err(e) = RECORD_MANAGER.lock().unwrap().register(&cr) {
         error!("Failed to register container record: {:?}", e);

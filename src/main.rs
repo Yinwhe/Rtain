@@ -3,7 +3,7 @@ use std::{env, sync::Mutex};
 use clap::{Args, Parser, Subcommand};
 
 mod container;
-use container::run;
+use container::{run, list_containers};
 
 mod records;
 use records::ContainerManager;
@@ -22,7 +22,10 @@ struct CLI {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Running a container.
     Run(RunArgs),
+    /// List containers.
+    PS(PSArgs),
 }
 
 #[derive(Args, Debug)]
@@ -44,6 +47,11 @@ struct RunArgs {
     command: Vec<String>,
 }
 
+#[derive(Args, Debug)]
+struct PSArgs {
+
+}
+
 fn main() {
     env::set_var("RUST_LOG", "debug");
     env_logger::init();
@@ -52,6 +60,7 @@ fn main() {
 
     match cli.command {
         Commands::Run(run_args) => run(run_args),
+        Commands::PS(ps_args) => list_containers(ps_args),
     }
 }
 
