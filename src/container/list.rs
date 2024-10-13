@@ -1,9 +1,10 @@
+use std::fs::read_to_string;
 use std::io::Write;
 
 use log::{debug, error};
 use tabwriter::TabWriter;
 
-use crate::{PSArgs, RECORD_MANAGER};
+use crate::{LogsArgs, PSArgs, RECORD_MANAGER};
 
 pub fn list_containers(_ps_args: PSArgs) {
     let mut bindings = RECORD_MANAGER.lock().unwrap();
@@ -34,4 +35,38 @@ pub fn list_containers(_ps_args: PSArgs) {
 
     let output = String::from_utf8(tw.into_inner().unwrap()).unwrap();
     println!("{}", output);
+}
+
+pub fn show_logs(log_args: LogsArgs) {
+    let mut bindings = RECORD_MANAGER.lock().unwrap();
+
+    let all_records = match bindings.all_container() {
+        Ok(records) => records,
+        Err(e) => {
+            error!("Failed to load container records: {}", e);
+            return;
+        }
+    };
+
+    let cr = match all_records.iter().find(|cr| cr.name == log_args.name) {
+        Some(cr) => cr,
+        None => {
+            error!("No container found with name: {}", log_args.name);
+            return;
+        }
+    };
+
+    let name_id = format!("{}-{}", cr.name, cr.id);
+    drop(bindings);
+
+    let path = format!("/tmp/rtain/{}/stdout.log", name_id);
+    let logs = match read_to_string(path) {
+        Ok(logs) => logs,
+        Err(e) => {
+            error!("Failed to read logs: {}", e);
+            return;
+        }
+    };
+
+    println!("{}", logs);
 }

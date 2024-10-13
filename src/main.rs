@@ -3,7 +3,7 @@ use std::{env, sync::Mutex};
 use clap::{Args, Parser, Subcommand};
 
 mod container;
-use container::{run, list_containers};
+use container::{list_containers, run, show_logs};
 
 mod records;
 use records::ContainerManager;
@@ -26,10 +26,16 @@ enum Commands {
     Run(RunArgs),
     /// List containers.
     PS(PSArgs),
+    /// Show a container's log.
+    Logs(LogsArgs),
 }
 
 #[derive(Args, Debug)]
 struct RunArgs {
+    /// Name of the container.
+    #[arg(short, long)]
+    name: Option<String>,
+
     /// Memory limit for the container.
     #[arg(short, long, value_parser(parse_memory_size))]
     memory: Option<i64>,
@@ -43,13 +49,16 @@ struct RunArgs {
     detach: bool,
 
     /// Command to run in the container.
-    #[arg(allow_hyphen_values = true)]
+    #[arg(allow_hyphen_values = true, required = true)]
     command: Vec<String>,
 }
 
 #[derive(Args, Debug)]
-struct PSArgs {
+struct PSArgs {}
 
+#[derive(Args, Debug)]
+struct LogsArgs {
+    name: String,
 }
 
 fn main() {
@@ -61,6 +70,7 @@ fn main() {
     match cli.command {
         Commands::Run(run_args) => run(run_args),
         Commands::PS(ps_args) => list_containers(ps_args),
+        Commands::Logs(logs_args) => show_logs(logs_args),
     }
 }
 

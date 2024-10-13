@@ -13,7 +13,7 @@ use nix::{
     mount::{mount, umount2, MntFlags, MsFlags},
     sched::{clone, CloneFlags},
     sys::wait::waitpid,
-    unistd::{chdir, execvp, pipe, pivot_root, read, write, Pid},
+    unistd::{chdir, dup2, execvp, pipe, pivot_root, read, write, Pid},
 };
 use rand::{thread_rng, Rng};
 
@@ -36,12 +36,21 @@ pub fn run(run_args: RunArgs) {
     };
 
     // Generate name-id.
-    let name_id = format!("rtain-{}", random_id());
+    let id: String = random_id();
+    let name = run_args.name.unwrap_or_else(|| id.clone());
+    let name_id = format!("{}-{}", name, id);
+
     let root_path = format!("/tmp/rtain/{}", name_id);
     let mnt_path = format!("/tmp/rtain/{}/mnt", name_id);
 
+    let log_path = if run_args.detach {
+        Some(format!("/tmp/rtain/{}/stdout.log", name_id))
+    } else {
+        None
+    };
+
     // Create a new process with new namespaces
-    let child = match new_container_process(&mnt_path, &run_args.command, read_fd) {
+    let child = match new_container_process(&mnt_path, &log_path, &run_args.command, read_fd) {
         Ok(child) => child,
         Err(err) => {
             error!("Failed to create new namespace process: {:?}", err);
@@ -77,8 +86,8 @@ pub fn run(run_args: RunArgs) {
 
     // Form the container record.
     let cr = ContainerRecord::new(
-        &name_id[..5],
-        &name_id[6..],
+        &name,
+        &id,
         child.as_raw(),
         &run_args.command.join(" "),
         ContainerStatus::Running,
@@ -150,7 +159,8 @@ fn do_init(root: &str, command: &Vec<String>) -> Result<(), Box<dyn std::error::
 /// Create a new process with new namespaces.
 /// This process will then do the initialization.
 fn new_container_process(
-    workspace_path: &str,
+    mnt_path: &str,
+    log_path: &Option<String>,
     command: &Vec<String>,
     read_fd: OwnedFd,
 ) -> Result<Pid, Box<dyn std::error::Error>> {
@@ -178,7 +188,25 @@ fn new_container_process(
             }
         }
 
-        if let Err(e) = do_init(workspace_path, command) {
+        // Stdio redirection
+        if let Some(log_path) = log_path {
+            let log_file = match fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(log_path)
+            {
+                Ok(file) => file,
+                Err(e) => {
+                    error!("Failed to open log file: {:?}", e);
+                    return -1;
+                }
+            };
+
+            let _ = dup2(log_file.as_raw_fd(), 1);
+        }
+
+        if let Err(e) = do_init(mnt_path, command) {
             error!("Failed to initialize container: {:?}", e);
             return -1;
         }
@@ -192,7 +220,7 @@ fn new_container_process(
     Ok(child_pid)
 }
 
-fn setup_mount(workspace_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn setup_mount(mnt_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Make the mount namespace private
     mount(
         None::<&str>,
@@ -203,7 +231,7 @@ fn setup_mount(workspace_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Switch to new root
-    switch_root(workspace_path)?;
+    switch_root(mnt_path)?;
 
     // Mount new proc fs
     if !Path::new("/proc").exists() {

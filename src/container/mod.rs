@@ -3,4 +3,4 @@ mod image;
 mod list;
 
 pub use init::run;
-pub use list::list_containers;
+pub use list::{list_containers, show_logs};

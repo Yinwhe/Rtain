@@ -33,8 +33,11 @@ pub struct ContainerManager {
 impl ContainerManager {
     pub fn init() -> Result<Self, Box<dyn std::error::Error>> {
         let root_path = PathBuf::from("/tmp/rtain");
-        let manager_path = root_path.join("manager.json");
+        if !root_path.exists() {
+            std::fs::create_dir_all(&root_path)?;
+        }
 
+        let manager_path = root_path.join("manager.json");
         if manager_path.exists() {
             Self::load()
         } else {
@@ -71,9 +74,6 @@ impl ContainerManager {
     }
 
     pub fn all_container(&mut self) -> Result<Vec<&ContainerRecord>, Box<dyn std::error::Error>> {
-        // let all: HashSet<&String> = self.records.iter().collect();
-        // let loaded: HashSet<&String> = self.loaded_datas.keys().collect();
-        // let not_loaded: HashSet<String> = all.difference(&loaded).cloned().cloned().collect();
         let not_loaded: Vec<String> = self
             .records
             .iter()
