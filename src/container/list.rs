@@ -38,26 +38,19 @@ pub fn list_containers(_ps_args: PSArgs) {
 }
 
 pub fn show_logs(log_args: LogsArgs) {
-    let mut bindings = RECORD_MANAGER.lock().unwrap();
-
-    let all_records = match bindings.all_container() {
-        Ok(records) => records,
+    let cr = match RECORD_MANAGER
+        .lock()
+        .unwrap()
+        .container_with_name(&log_args.name)
+    {
+        Ok(cr) => cr.clone(),
         Err(e) => {
-            error!("Failed to load container records: {}", e);
-            return;
-        }
-    };
-
-    let cr = match all_records.iter().find(|cr| cr.name == log_args.name) {
-        Some(cr) => cr,
-        None => {
-            error!("No container found with name: {}", log_args.name);
+            error!("Failed to get container record: {}", e);
             return;
         }
     };
 
     let name_id = format!("{}-{}", cr.name, cr.id);
-    drop(bindings);
 
     let path = format!("/tmp/rtain/{}/stdout.log", name_id);
     let logs = match read_to_string(path) {

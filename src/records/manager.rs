@@ -90,6 +90,19 @@ impl ContainerManager {
         Ok(self.loaded_datas.values().collect())
     }
 
+    pub fn container_with_name(
+        &mut self,
+        name: &str,
+    ) -> Result<&ContainerRecord, Box<dyn std::error::Error>> {
+        let containers = self.all_container()?;
+
+        let container = containers.iter().find(|c| c.name == name);
+        match container {
+            Some(c) => Ok(c),
+            None => Err(format!("No container found with name: {}", name).into()),
+        }
+    }
+
     fn load_record(&mut self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
         let path = self.root_path.join(format!("{}.json", id));
         let record = ContainerRecord::load(&path)?;

@@ -23,9 +23,9 @@ use crate::{
     RunArgs, RECORD_MANAGER,
 };
 
-/// When run a container command, it first creates a new process with new
-/// namespaces and then runs the init command.
-pub fn run(run_args: RunArgs) {
+/// When run a container command, it first creates a new container process
+/// and then runs the command.
+pub fn run_container(run_args: RunArgs) {
     // Create pipes
     let (read_fd, write_fd) = match pipe() {
         Ok((read_fd, write_fd)) => (read_fd, write_fd),
@@ -43,6 +43,7 @@ pub fn run(run_args: RunArgs) {
     let root_path = format!("/tmp/rtain/{}", name_id);
     let mnt_path = format!("/tmp/rtain/{}/mnt", name_id);
 
+    // If detach, we shall record the outputs in log file.
     let log_path = if run_args.detach {
         Some(format!("/tmp/rtain/{}/stdout.log", name_id))
     } else {
@@ -140,22 +141,6 @@ fn do_init(root: &str, command: &Vec<String>) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-// /// When a child container ends, call this function to do the cleans.
-// fn do_clean(cr: ContainerRecord) -> Result<(), Box<dyn std::error::Error>> {
-//     let name_id = format!("rtain-{}", cr.id);
-//     let root_path = format!("/tmp/rtain/{}", name_id);
-//     let mnt_path = format!("/tmp/rtain/{}/mnt", name_id);
-
-//     let hier = cgroups_rs::hierarchies::auto();
-//     let cg = Cgroup::load(hier, &name_id);
-
-//     let _ = cg.delete();
-//     let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume);
-//     let _ = RECORD_MANAGER.lock().unwrap().deregister(&name_id);
-
-//     Ok(())
-// }
-
 /// Create a new process with new namespaces.
 /// This process will then do the initialization.
 fn new_container_process(
@@ -220,6 +205,22 @@ fn new_container_process(
     Ok(child_pid)
 }
 
+fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, Box<dyn std::error::Error>> {
+    let hier = cgroups_rs::hierarchies::auto();
+    let cg = match CgroupBuilder::new(&cg_name).build(hier) {
+        Ok(cg) => cg,
+        Err(e) => return Err(Box::new(e)),
+    };
+
+    match cg.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
+        Ok(_) => Ok(cg),
+        Err(e) => {
+            cg.delete()?;
+            Err(Box::new(e))
+        }
+    }
+}
+
 fn setup_mount(mnt_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Make the mount namespace private
     mount(
@@ -279,22 +280,6 @@ fn switch_root(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     fs::remove_dir_all(pivot_dir_old)?;
 
     Ok(())
-}
-
-fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, Box<dyn std::error::Error>> {
-    let hier = cgroups_rs::hierarchies::auto();
-    let cg = match CgroupBuilder::new(&cg_name).build(hier) {
-        Ok(cg) => cg,
-        Err(e) => return Err(Box::new(e)),
-    };
-
-    match cg.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
-        Ok(_) => Ok(cg),
-        Err(e) => {
-            cg.delete()?;
-            Err(Box::new(e))
-        }
-    }
 }
 
 fn random_id() -> String {
