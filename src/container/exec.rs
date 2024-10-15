@@ -14,16 +14,25 @@ use crate::{ExecArgs, RECORD_MANAGER};
 /// Enter a container.
 pub fn exec_container(exec_args: ExecArgs) {
     // Let's first get the container pid.
-    let pid = match RECORD_MANAGER
-        .lock()
-        .unwrap()
-        .container_with_name(&exec_args.name)
-    {
-        Ok(cr) => cr.pid,
-        Err(e) => {
-            error!("Failed to exec container {}, due to: {}", exec_args.name, e);
+    let pid = {
+        let bindings = RECORD_MANAGER.lock().unwrap();
+        let cr = match bindings.container_with_name(&exec_args.name) {
+            Ok(cr) => cr,
+            Err(e) => {
+                error!("Failed to exec container {}, due to: {}", exec_args.name, e);
+                return;
+            }
+        };
+
+        if !cr.status.is_running() {
+            error!(
+                "Failed to exec container {}, it's not running",
+                exec_args.name
+            );
             return;
         }
+
+        cr.pid.parse::<i32>().unwrap()
     };
 
     // Clone and exec into the container.

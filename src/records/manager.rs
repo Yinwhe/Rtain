@@ -3,14 +3,13 @@ use std::{
     path::PathBuf,
 };
 
-use log::debug;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContainerRecord {
     pub id: String,
     pub name: String,
-    pub pid: i32,
+    pub pid: String,
     pub command: String,
     pub status: ContainerStatus,
 }
@@ -18,7 +17,7 @@ pub struct ContainerRecord {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ContainerStatus {
     Running,
-    Stop,
+    Stopped,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,7 +37,7 @@ impl ContainerManager {
         }
 
         let manager_path = root_path.join("manager.json");
-        if manager_path.exists() {
+        let mut manager = if manager_path.exists() {
             Self::load()
         } else {
             let manager = ContainerManager {
@@ -51,7 +50,14 @@ impl ContainerManager {
             manager.save()?;
 
             Ok(manager)
+        };
+
+        if let Ok(manager) = &mut manager {
+            // For current simple impl, we only need to sync once at the start.
+            manager.sync()?;
         }
+
+        manager
     }
 
     pub fn register(&mut self, record: &ContainerRecord) -> Result<(), Box<dyn std::error::Error>> {
@@ -73,7 +79,25 @@ impl ContainerManager {
         self.save()
     }
 
-    pub fn all_container(&mut self) -> Result<Vec<&ContainerRecord>, Box<dyn std::error::Error>> {
+    pub fn update(
+        &mut self,
+        id: &str,
+        pid: &str,
+        status: ContainerStatus,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let cr = match self.loaded_datas.get_mut(id) {
+            Some(cr) => cr,
+            None => return Err(format!("No container found with id: {}", id).into()),
+        };
+
+        cr.pid = pid.to_string();
+        cr.status = status;
+        cr.save(&self.root_path)?;
+
+        Ok(())
+    }
+
+    pub fn sync(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let not_loaded: Vec<String> = self
             .records
             .iter()
@@ -81,24 +105,24 @@ impl ContainerManager {
             .cloned()
             .collect();
 
-        debug!("not loaded: {:?}", not_loaded);
-
         for to_load in not_loaded {
             self.load_record(&to_load)?;
         }
 
+        Ok(())
+    }
+
+    pub fn all_containers(&self) -> Result<Vec<&ContainerRecord>, Box<dyn std::error::Error>> {
         Ok(self.loaded_datas.values().collect())
     }
 
     pub fn container_with_name(
-        &mut self,
+        &self,
         name: &str,
     ) -> Result<&ContainerRecord, Box<dyn std::error::Error>> {
-        let containers = self.all_container()?;
-
-        let container = containers.iter().find(|c| c.name == name);
+        let container = self.loaded_datas.iter().find(|(_, c)| c.name == name);
         match container {
-            Some(c) => Ok(c),
+            Some((_, c)) => Ok(c),
             None => Err(format!("No container found with name: {}", name).into()),
         }
     }
@@ -138,11 +162,11 @@ impl Drop for ContainerManager {
 }
 
 impl ContainerRecord {
-    pub fn new(name: &str, id: &str, pid: i32, command: &str, status: ContainerStatus) -> Self {
+    pub fn new(name: &str, id: &str, pid: &str, command: &str, status: ContainerStatus) -> Self {
         ContainerRecord {
             id: id.to_string(),
             name: name.to_string(),
-            pid,
+            pid: pid.to_string(),
             command: command.to_string(),
             status,
         }
@@ -167,5 +191,14 @@ impl ContainerRecord {
         let record: ContainerRecord = serde_json::from_str(&record)?;
 
         Ok(record)
+    }
+}
+
+impl ContainerStatus {
+    pub fn is_running(&self) -> bool {
+        match self {
+            ContainerStatus::Running => true,
+            _ => false,
+        }
     }
 }

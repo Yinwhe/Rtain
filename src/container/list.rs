@@ -7,8 +7,8 @@ use tabwriter::TabWriter;
 use crate::{LogsArgs, PSArgs, RECORD_MANAGER};
 
 pub fn list_containers(_ps_args: PSArgs) {
-    let mut bindings = RECORD_MANAGER.lock().unwrap();
-    let records = match bindings.all_container() {
+    let bindings = RECORD_MANAGER.lock().unwrap();
+    let records = match bindings.all_containers() {
         Ok(records) => records,
         Err(e) => {
             error!("Failed to list containers: {}", e);

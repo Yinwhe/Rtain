@@ -89,7 +89,7 @@ pub fn run_container(run_args: RunArgs) {
     let cr = ContainerRecord::new(
         &name,
         &id,
-        child.as_raw(),
+        &child.to_string(),
         &run_args.command.join(" "),
         ContainerStatus::Running,
     );
