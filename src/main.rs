@@ -3,7 +3,10 @@ use std::{env, sync::Mutex};
 use clap::{Args, Parser, Subcommand};
 
 mod container;
-use container::{exec_container, list_containers, run_container, show_logs, stop_container};
+use container::{
+    exec_container, list_containers, remove_container, run_container, show_logs, start_container,
+    stop_container,
+};
 
 mod records;
 use records::ContainerManager;
@@ -22,12 +25,16 @@ struct CLI {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Running a container.
+    /// Running a container from images.
     Run(RunArgs),
-    /// Enter a container.
+    /// Start a stoped container.
+    Start(StartArgs),
+    /// Enter a running container.
     Exec(ExecArgs),
     /// Stop a container.
     Stop(StopArgs),
+    /// Remove a stopped container.
+    RM(RMArgs),
     /// List containers.
     PS(PSArgs),
     /// Show a container's log.
@@ -58,6 +65,11 @@ struct RunArgs {
 }
 
 #[derive(Args, Debug)]
+struct StartArgs {
+    name: String,
+}
+
+#[derive(Args, Debug)]
 struct ExecArgs {
     /// Name of the container.
     #[arg(short, long)]
@@ -74,7 +86,15 @@ struct StopArgs {
 }
 
 #[derive(Args, Debug)]
-struct PSArgs {}
+struct RMArgs {
+    name: String,
+}
+
+#[derive(Args, Debug)]
+struct PSArgs {
+    #[arg(short, long)]
+    all: bool,
+}
 
 #[derive(Args, Debug)]
 struct LogsArgs {
@@ -89,8 +109,10 @@ fn main() {
 
     match cli.command {
         Commands::Run(run_args) => run_container(run_args),
+        Commands::Start(start_args) => start_container(start_args),
         Commands::Exec(exec_args) => exec_container(exec_args),
         Commands::Stop(stop_args) => stop_container(stop_args),
+        Commands::RM(rm_args) => remove_container(rm_args),
         Commands::PS(ps_args) => list_containers(ps_args),
         Commands::Logs(logs_args) => show_logs(logs_args),
     }
