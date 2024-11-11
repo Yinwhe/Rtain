@@ -39,6 +39,8 @@ enum Commands {
     PS(PSArgs),
     /// Show a container's log.
     Logs(LogsArgs),
+    /// Commit a container to an image.
+    Commit(CommitArgs),
 }
 
 #[derive(Args, Debug)]
@@ -59,6 +61,10 @@ struct RunArgs {
     #[arg(short, long)]
     detach: bool,
 
+    /// Image to run.
+    #[arg(required = true)]
+    image: String,
+
     /// Command to run in the container.
     #[arg(allow_hyphen_values = true, required = true)]
     command: Vec<String>,
@@ -66,7 +72,12 @@ struct RunArgs {
 
 #[derive(Args, Debug)]
 struct StartArgs {
+    /// Name of the container.
+    #[arg(short, long)]
     name: String,
+    /// Interactive mode.
+    #[arg(short, long)]
+    interactive: bool,
 }
 
 #[derive(Args, Debug)]
@@ -101,6 +112,15 @@ struct LogsArgs {
     name: String,
 }
 
+#[derive(Args, Debug)]
+struct CommitArgs {
+    /// Name of the container to commit.
+    name: String,
+    /// Committed image name.
+    image: String,
+}
+
+
 fn main() {
     env::set_var("RUST_LOG", "debug");
     env_logger::init();
@@ -115,6 +135,7 @@ fn main() {
         Commands::RM(rm_args) => remove_container(rm_args),
         Commands::PS(ps_args) => list_containers(ps_args),
         Commands::Logs(logs_args) => show_logs(logs_args),
+        Commands::Commit(commit_args) => container::commit_container(commit_args),
     }
 }
 

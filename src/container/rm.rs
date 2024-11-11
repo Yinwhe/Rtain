@@ -42,6 +42,7 @@ pub fn remove_container(rm_args: RMArgs) {
         );
     }
 
+    // TODO: volume support needed.
     debug!("Delete workspace: {:?}", &root_path);
     if let Err(e) = delete_workspace(&root_path, &mnt_path, &None) {
         error!(

@@ -26,6 +26,7 @@ use crate::{
 /// When run a container command, it first creates a new container process
 /// and then runs the command.
 pub fn run_container(run_args: RunArgs) {
+    // TODO: Support run diffrent images.
     // Create pipes
     let (read_fd, write_fd) = match pipe() {
         Ok((read_fd, write_fd)) => (read_fd, write_fd),
