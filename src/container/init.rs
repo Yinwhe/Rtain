@@ -26,7 +26,6 @@ use crate::{
 /// When run a container command, it first creates a new container process
 /// and then runs the command.
 pub fn run_container(run_args: RunArgs) {
-    // TODO: Support run diffrent images.
     // Create pipes
     let (read_fd, write_fd) = match pipe() {
         Ok((read_fd, write_fd)) => (read_fd, write_fd),
@@ -75,7 +74,7 @@ pub fn run_container(run_args: RunArgs) {
     };
 
     // Here we create the new rootfs
-    if let Err(e) = new_workspace(&root_path, &mnt_path, &run_args.volume) {
+    if let Err(e) = new_workspace(&run_args.image, &root_path, &mnt_path, &run_args.volume) {
         error!("Failed to create new workspace: {:?}", e);
 
         // Clean up...

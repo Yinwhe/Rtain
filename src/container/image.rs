@@ -1,19 +1,21 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use log::{debug, info};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 
 pub fn new_workspace(
+    image_path: &str,
     root_path: &str,
     mnt_path: &str,
     volume: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let image_path = Path::new(image_path);
     let root_path = Path::new(root_path);
     let mnt_path = Path::new(mnt_path);
 
-    create_ro_layer(&root_path)?;
+    create_ro_layer(&image_path, &root_path)?;
     create_rw_layer(&root_path)?;
     create_mount_point(&root_path, &mnt_path)?;
 
@@ -29,30 +31,29 @@ pub fn new_workspace(
     Ok(())
 }
 
-// Create a read-only layer, which is the busybox image.
-fn create_ro_layer(root_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let busybox_dir = root_path.join("busybox");
-    let busybox_tar = PathBuf::from("/home/ubuntu/Workspaces/Rtain/busybox.tar");
+// Create a read-only layer, on the given image.
+fn create_ro_layer(image_path: &Path, root_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let image_dir = root_path.join("image");
 
-    if !busybox_dir.exists() {
-        fs::create_dir_all(&busybox_dir)?;
+    if !image_dir.exists() {
+        fs::create_dir_all(&image_dir)?;
 
         let status = Command::new("tar")
             .arg("-xvf")
-            .arg(&busybox_tar)
+            .arg(&image_path)
             .arg("-C")
-            .arg(&busybox_dir)
+            .arg(&image_dir)
             .stdout(Stdio::null())
             .status()?;
 
         if status.success() {
-            debug!("Unpacked busybox image to {:?}", busybox_dir);
+            debug!("Unpacked image to {:?}", image_dir);
         } else {
-            return Err("Failed to unpack busybox image".into());
+            return Err("Failed to unpack image".into());
         }
     }
 
-    debug!("Read-only layer at {:?}", busybox_dir);
+    debug!("Read-only layer at {:?}", image_dir);
 
     Ok(())
 }
@@ -72,7 +73,7 @@ fn create_rw_layer(root_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 fn create_mount_point(root_path: &Path, mnt_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let upperdir = root_path.join("writeLayer");
-    let lowerdir = root_path.join("busybox");
+    let lowerdir = root_path.join("image");
     let workdir = root_path.join("work");
 
     if !workdir.exists() {
