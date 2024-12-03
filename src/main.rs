@@ -73,7 +73,7 @@ struct RunArgs {
 #[derive(Args, Debug)]
 struct StartArgs {
     /// Name of the container.
-    #[arg(short, long)]
+    #[arg(required = true)]
     name: String,
     /// Interactive mode.
     #[arg(short, long)]

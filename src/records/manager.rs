@@ -79,10 +79,9 @@ impl ContainerManager {
         self.save()
     }
 
-    pub fn update(
+    pub fn set_status(
         &mut self,
         id: &str,
-        pid: &str,
         status: ContainerStatus,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let cr = match self.loaded_datas.get_mut(id) {
@@ -90,7 +89,6 @@ impl ContainerManager {
             None => return Err(format!("No container found with id: {}", id).into()),
         };
 
-        cr.pid = pid.to_string();
         cr.status = status;
         cr.save(&self.root_path)?;
 

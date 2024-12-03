@@ -23,7 +23,13 @@ pub fn commit_container(cm_args: CommitArgs) {
     let mnt_path = Path::new("/tmp/rtain").join(name_id).join("mnt");
     let image_path = Path::new(&cm_args.image).join(format!("{}.tar", cm_args.image));
 
-    debug!("Commit container {} to image {}", &cm_args.name, &cm_args.image);
+    debug!(
+        "Commit container {}({}) to image {}({})",
+        &cm_args.name,
+        &mnt_path.to_string_lossy(),
+        &cm_args.image,
+        &image_path.to_string_lossy()
+    );
 
     if !mnt_path.exists() {
         error!(

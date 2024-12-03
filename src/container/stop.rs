@@ -41,7 +41,7 @@ pub fn stop_container(stop_args: StopArgs) {
     match RECORD_MANAGER
         .lock()
         .unwrap()
-        .update(&id, "X", ContainerStatus::Stopped)
+        .set_status(&id, ContainerStatus::Stopped)
     {
         Ok(_) => {
             info!("Container {} stopped", stop_args.name);
@@ -53,6 +53,4 @@ pub fn stop_container(stop_args: StopArgs) {
             );
         }
     }
-
-    // TODO: improve codes.
 }

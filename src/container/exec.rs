@@ -35,8 +35,6 @@ pub fn exec_container(exec_args: ExecArgs) {
         cr.pid.parse::<i32>().unwrap()
     };
 
-    // TODO: Improve codes.
-
     // Clone and exec into the container.
     const STACK_SIZE: usize = 1 * 1024 * 1024;
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];

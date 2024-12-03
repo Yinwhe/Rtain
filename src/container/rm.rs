@@ -58,4 +58,6 @@ pub fn remove_container(rm_args: RMArgs) {
             &rm_args.name, e
         );
     }
+
+    // FIXME: Shall we delete the whole workspace ?
 }

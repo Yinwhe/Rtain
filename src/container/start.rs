@@ -24,5 +24,4 @@ pub fn start_container(start_args: StartArgs) {
     }
 
     // TODO: run it with command and detach by default.
-    
 }

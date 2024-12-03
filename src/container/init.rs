@@ -112,17 +112,20 @@ pub fn run_container(run_args: RunArgs) {
         match waitpid(child, None) {
             Ok(status) => {
                 info!("Child process exited with status: {:?}", status);
-
-                let _ = cg.delete();
-                let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume);
-                let _ = RECORD_MANAGER.lock().unwrap().deregister(&name_id);
+                // Record it as stoped.
+                let _ = RECORD_MANAGER
+                    .lock()
+                    .unwrap()
+                    .set_status(&id, ContainerStatus::Stopped);
             }
             Err(err) => {
                 error!("Failed to wait for child process: {:?}", err);
             }
         }
     }
-    // Or detach from its child.
+    // Or detach from its child, but we still need to monitor it.
+
+    // TODO: write a demon process as manager.
 }
 
 /// This is the first process in the new namespace.
