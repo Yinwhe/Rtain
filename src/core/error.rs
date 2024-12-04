@@ -1,0 +1,1 @@
+pub type SimpleError = Box<dyn std::error::Error>;

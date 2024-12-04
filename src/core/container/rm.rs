@@ -1,16 +1,19 @@
 use cgroups_rs::Cgroup;
 use log::{debug, error};
 
-use crate::{RMArgs, RECORD_MANAGER};
-
 use super::image::delete_workspace;
+use crate::core::cmd::RMArgs;
+use crate::core::RECORD_MANAGER;
+use crate::ROOT_PATH;
 
 pub fn remove_container(rm_args: RMArgs) {
-    let bindings = RECORD_MANAGER.lock().unwrap();
-    let cr = match bindings.container_with_name(&rm_args.name) {
-        Ok(cr) => cr,
-        Err(e) => {
-            error!("Failed to stop container {}, due to: {}", &rm_args.name, e);
+    let cr = match RECORD_MANAGER.get_record(&rm_args.name) {
+        Some(cr) => cr,
+        None => {
+            error!(
+                "Failed to rm container {}, record does not exist",
+                &rm_args.name
+            );
             return;
         }
     };
@@ -25,11 +28,8 @@ pub fn remove_container(rm_args: RMArgs) {
 
     // Do some clean up.
     let name_id = format!("{}-{}", cr.name, cr.id);
-    let root_path = format!("/tmp/rtain/{}", name_id);
-    let mnt_path = format!("/tmp/rtain/{}/mnt", name_id);
-
-    let id = cr.id.clone();
-    drop(bindings);
+    let root_path = format!("{}/{}", ROOT_PATH, name_id);
+    let mnt_path = format!("{}/{}/mnt", ROOT_PATH, name_id);
 
     let hier = cgroups_rs::hierarchies::auto();
     let cg = Cgroup::load(hier, name_id);
@@ -51,13 +51,8 @@ pub fn remove_container(rm_args: RMArgs) {
         );
     }
 
-    debug!("Deregister container: {:?}", &id);
-    if let Err(e) = RECORD_MANAGER.lock().unwrap().deregister(&id) {
-        error!(
-            "Failed to rm container {}, cannot deregister: {}",
-            &rm_args.name, e
-        );
-    }
+    debug!("Deregister container: {:?}", &cr.name);
+    RECORD_MANAGER.deregister(&cr.id);
 
     // FIXME: Shall we delete the whole workspace ?
 }

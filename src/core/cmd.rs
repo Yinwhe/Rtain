@@ -1,30 +1,16 @@
-use std::{env, sync::Mutex};
-
 use clap::{Args, Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 
-mod container;
-use container::{
-    exec_container, list_containers, remove_container, run_container, show_logs, start_container,
-    stop_container,
-};
-
-mod records;
-use records::ContainerManager;
-
-lazy_static::lazy_static! {
-    pub static ref RECORD_MANAGER: Mutex<ContainerManager> = Mutex::new(ContainerManager::init().unwrap());
-}
-
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Serialize, Deserialize)]
 #[command(name = "rtain")]
 #[command(about = "rtain is a simple container runtime implemented in Rust.")]
-struct CLI {
+pub struct CLI {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand, Debug)]
-enum Commands {
+#[derive(Subcommand, Debug, Serialize, Deserialize)]
+pub enum Commands {
     /// Running a container from images.
     Run(RunArgs),
     /// Start a stoped container.
@@ -43,100 +29,81 @@ enum Commands {
     Commit(CommitArgs),
 }
 
-#[derive(Args, Debug)]
-struct RunArgs {
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct RunArgs {
     /// Name of the container.
     #[arg(short, long)]
-    name: Option<String>,
+    pub name: Option<String>,
 
     /// Memory limit for the container.
     #[arg(short, long, value_parser(parse_memory_size))]
-    memory: Option<i64>,
+    pub memory: Option<i64>,
 
     /// Stabilize using the volume mount.
     #[arg(short, long)]
-    volume: Option<String>,
+    pub volume: Option<String>,
 
     /// Detach the container.
     #[arg(short, long)]
-    detach: bool,
+    pub detach: bool,
 
     /// Image to run.
     #[arg(required = true)]
-    image: String,
+    pub image: String,
 
     /// Command to run in the container.
     #[arg(allow_hyphen_values = true, required = true)]
-    command: Vec<String>,
+    pub command: Vec<String>,
 }
 
-#[derive(Args, Debug)]
-struct StartArgs {
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct StartArgs {
     /// Name of the container.
     #[arg(required = true)]
-    name: String,
+    pub name: String,
     /// Interactive mode.
     #[arg(short, long)]
-    interactive: bool,
+    pub interactive: bool,
 }
 
-#[derive(Args, Debug)]
-struct ExecArgs {
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct ExecArgs {
     /// Name of the container.
     #[arg(short, long)]
-    name: String,
+    pub name: String,
 
     /// Command to run in the container.
     #[arg(allow_hyphen_values = true, required = true)]
-    command: Vec<String>,
+    pub command: Vec<String>,
 }
 
-#[derive(Args, Debug)]
-struct StopArgs {
-    name: String,
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct StopArgs {
+    pub name: String,
 }
 
-#[derive(Args, Debug)]
-struct RMArgs {
-    name: String,
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct RMArgs {
+    pub name: String,
 }
 
-#[derive(Args, Debug)]
-struct PSArgs {
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct PSArgs {
     #[arg(short, long)]
-    all: bool,
+    pub all: bool,
 }
 
-#[derive(Args, Debug)]
-struct LogsArgs {
-    name: String,
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct LogsArgs {
+    pub name: String,
 }
 
-#[derive(Args, Debug)]
-struct CommitArgs {
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct CommitArgs {
     /// Name of the container to commit.
-    name: String,
+    pub name: String,
     /// Committed image name.
-    image: String,
-}
-
-
-fn main() {
-    env::set_var("RUST_LOG", "debug");
-    env_logger::init();
-
-    let cli = CLI::parse();
-
-    match cli.command {
-        Commands::Run(run_args) => run_container(run_args),
-        Commands::Start(start_args) => start_container(start_args),
-        Commands::Exec(exec_args) => exec_container(exec_args),
-        Commands::Stop(stop_args) => stop_container(stop_args),
-        Commands::RM(rm_args) => remove_container(rm_args),
-        Commands::PS(ps_args) => list_containers(ps_args),
-        Commands::Logs(logs_args) => show_logs(logs_args),
-        Commands::Commit(commit_args) => container::commit_container(commit_args),
-    }
+    pub image: String,
 }
 
 /// Parse a memory size string into bytes.

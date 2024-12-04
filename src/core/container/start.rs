@@ -1,15 +1,15 @@
 use log::error;
 
-use crate::{StartArgs, RECORD_MANAGER};
+use crate::core::cmd::StartArgs;
+use crate::core::RECORD_MANAGER;
 
 pub fn start_container(start_args: StartArgs) {
-    let bindings = RECORD_MANAGER.lock().unwrap();
-    let cr = match bindings.container_with_name(&start_args.name) {
-        Ok(cr) => cr,
-        Err(e) => {
+    let cr = match RECORD_MANAGER.get_record(&start_args.name) {
+        Some(cr) => cr,
+        None => {
             error!(
-                "Failed to start container {}, due to: {}",
-                &start_args.name, e
+                "Failed to start container {}, record does not exist",
+                &start_args.name
             );
             return;
         }

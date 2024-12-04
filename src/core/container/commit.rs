@@ -2,25 +2,25 @@ use std::{path::Path, process::Command};
 
 use log::{debug, error};
 
-use crate::{CommitArgs, RECORD_MANAGER};
+use crate::core::cmd::CommitArgs;
+use crate::core::RECORD_MANAGER;
+use crate::ROOT_PATH;
 
 pub fn commit_container(cm_args: CommitArgs) {
-    let bindings = RECORD_MANAGER.lock().unwrap();
-    let cr = match bindings.container_with_name(&cm_args.name) {
-        Ok(cr) => cr,
-        Err(e) => {
+    let cr = match RECORD_MANAGER.get_record(&cm_args.name) {
+        Some(cr) => cr,
+        None => {
             error!(
-                "Failed to commit container {}, due to: {}",
-                &cm_args.name, e
+                "Failed to commit container {}, record does not exist",
+                &cm_args.name
             );
             return;
         }
     };
 
     let name_id = format!("{}-{}", cr.name, cr.id);
-    drop(bindings);
 
-    let mnt_path = Path::new("/tmp/rtain").join(name_id).join("mnt");
+    let mnt_path = Path::new(ROOT_PATH).join(name_id).join("mnt");
     let image_path = Path::new(&cm_args.image).join(format!("{}.tar", cm_args.image));
 
     debug!(

@@ -5,12 +5,14 @@ use std::process::{Command, Stdio};
 use log::{debug, info};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 
+use crate::core::error::SimpleError;
+
 pub fn new_workspace(
     image_path: &str,
     root_path: &str,
     mnt_path: &str,
     volume: &Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SimpleError> {
     let image_path = Path::new(image_path);
     let root_path = Path::new(root_path);
     let mnt_path = Path::new(mnt_path);
@@ -32,7 +34,7 @@ pub fn new_workspace(
 }
 
 // Create a read-only layer, on the given image.
-fn create_ro_layer(image_path: &Path, root_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn create_ro_layer(image_path: &Path, root_path: &Path) -> Result<(), SimpleError> {
     let image_dir = root_path.join("image");
 
     if !image_dir.exists() {
@@ -59,7 +61,7 @@ fn create_ro_layer(image_path: &Path, root_path: &Path) -> Result<(), Box<dyn st
 }
 
 // Create a read-write layer, which is the container's write layer.
-fn create_rw_layer(root_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn create_rw_layer(root_path: &Path) -> Result<(), SimpleError> {
     let write_dir = root_path.join("writeLayer");
     if !write_dir.exists() {
         debug!("Create write layer dir: {:?}", write_dir);
@@ -71,7 +73,7 @@ fn create_rw_layer(root_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn create_mount_point(root_path: &Path, mnt_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn create_mount_point(root_path: &Path, mnt_path: &Path) -> Result<(), SimpleError> {
     let upperdir = root_path.join("writeLayer");
     let lowerdir = root_path.join("image");
     let workdir = root_path.join("work");
@@ -113,7 +115,7 @@ pub fn delete_workspace(
     root_path: &str,
     mnt_path: &str,
     volume: &Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SimpleError> {
     let root_path = Path::new(root_path);
     let mnt_path = Path::new(mnt_path);
 
@@ -130,7 +132,7 @@ pub fn delete_workspace(
     Ok(())
 }
 
-fn delete_mount_point(mnt_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn delete_mount_point(mnt_path: &Path) -> Result<(), SimpleError> {
     debug!("Unmounted {:?}", mnt_path);
     Command::new("umount").arg(mnt_path).status()?;
 
@@ -140,7 +142,7 @@ fn delete_mount_point(mnt_path: &Path) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-fn delete_write_layer(root_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn delete_write_layer(root_path: &Path) -> Result<(), SimpleError> {
     let write_dir = root_path.join("writeLayer");
     let work_dir = root_path.join("work");
 
@@ -153,7 +155,7 @@ fn delete_write_layer(root_path: &Path) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> Result<(), Box<dyn std::error::Error>> {
+fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> Result<(), SimpleError> {
     info!("Mounting volume: {:?}", volume_path);
 
     let hostv = Path::new(volume_path[0]);
@@ -184,7 +186,7 @@ fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> Result<(), Box<dyn s
 fn umount_volume(
     mnt_path: &Path,
     volume_path: Vec<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SimpleError> {
     info!("Unmounting volume: {:?}", volume_path);
 
     let contv = mnt_path.join(volume_path[1].strip_prefix("/").unwrap());

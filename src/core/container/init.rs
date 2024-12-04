@@ -18,10 +18,15 @@ use nix::{
 use rand::{thread_rng, Rng};
 
 use crate::{
-    container::image::{delete_workspace, new_workspace},
-    records::{ContainerRecord, ContainerStatus},
-    RunArgs, RECORD_MANAGER,
+    core::{
+        cmd::RunArgs,
+        records::{ContainerRecord, ContainerStatus},
+        RECORD_MANAGER,
+    },
+    ROOT_PATH,
 };
+
+use super::image::new_workspace;
 
 /// When run a container command, it first creates a new container process
 /// and then runs the command.
@@ -40,12 +45,12 @@ pub fn run_container(run_args: RunArgs) {
     let name = run_args.name.unwrap_or_else(|| id.clone());
     let name_id = format!("{}-{}", name, id);
 
-    let root_path = format!("/tmp/rtain/{}", name_id);
-    let mnt_path = format!("/tmp/rtain/{}/mnt", name_id);
+    let root_path = format!("{}/{}", ROOT_PATH, name_id);
+    let mnt_path = format!("{}/{}/mnt", root_path, name_id);
 
     // If detach, we shall record the outputs in log file.
     let log_path = if run_args.detach {
-        Some(format!("/tmp/rtain/{}/stdout.log", name_id))
+        Some(format!("{}/{}/stdout.log", ROOT_PATH, name_id))
     } else {
         None
     };
@@ -93,17 +98,7 @@ pub fn run_container(run_args: RunArgs) {
         &run_args.command.join(" "),
         ContainerStatus::Running,
     );
-    if let Err(e) = RECORD_MANAGER.lock().unwrap().register(&cr) {
-        error!("Failed to register container record: {:?}", e);
-
-        // Clean up...
-        write(&write_fd, b"EXIT").unwrap();
-        let _ = waitpid(child, None);
-        let _ = cg.delete();
-        let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume);
-
-        exit(-1);
-    }
+    RECORD_MANAGER.register(cr);
 
     // Let the init to continue.
     write(&write_fd, b"CONT").unwrap();
@@ -113,10 +108,7 @@ pub fn run_container(run_args: RunArgs) {
             Ok(status) => {
                 info!("Child process exited with status: {:?}", status);
                 // Record it as stoped.
-                let _ = RECORD_MANAGER
-                    .lock()
-                    .unwrap()
-                    .set_status(&id, ContainerStatus::Stopped);
+                let _ = RECORD_MANAGER.set_status(&id, ContainerStatus::Stopped);
             }
             Err(err) => {
                 error!("Failed to wait for child process: {:?}", err);
