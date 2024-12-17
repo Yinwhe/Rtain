@@ -5,8 +5,7 @@ use log::error;
 use tabwriter::TabWriter;
 
 use crate::core::cmd::{LogsArgs, PSArgs};
-use crate::core::RECORD_MANAGER;
-use crate::ROOT_PATH;
+use crate::core::{RECORD_MANAGER, ROOT_PATH};
 
 pub fn list_containers(_ps_args: PSArgs) {
     let records = RECORD_MANAGER.get_all_records();

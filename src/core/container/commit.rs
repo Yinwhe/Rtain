@@ -3,8 +3,7 @@ use std::{path::Path, process::Command};
 use log::{debug, error};
 
 use crate::core::cmd::CommitArgs;
-use crate::core::RECORD_MANAGER;
-use crate::ROOT_PATH;
+use crate::core::{RECORD_MANAGER, ROOT_PATH};
 
 pub fn commit_container(cm_args: CommitArgs) {
     let cr = match RECORD_MANAGER.get_record(&cm_args.name) {

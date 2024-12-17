@@ -17,13 +17,10 @@ use nix::{
 };
 use rand::{thread_rng, Rng};
 
-use crate::{
-    core::{
-        cmd::RunArgs,
-        records::{ContainerRecord, ContainerStatus},
-        RECORD_MANAGER,
-    },
-    ROOT_PATH,
+use crate::core::{
+    cmd::RunArgs,
+    records::{ContainerRecord, ContainerStatus},
+    RECORD_MANAGER, ROOT_PATH,
 };
 
 use super::image::new_workspace;

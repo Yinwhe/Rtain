@@ -1,63 +1,79 @@
-use std::{
-    env, fs,
-    io::{BufReader, Read},
-    os::unix::net::{UnixListener, UnixStream},
-};
+use std::env;
 
+use async_std::{
+    io::ReadExt,
+    os::unix::net::{UnixListener, UnixStream},
+    stream::StreamExt,
+    task,
+};
 use lazy_static::lazy_static;
 use log::{debug, info};
 
 use records::ContainerManager;
 
 mod cmd;
-mod error;
 mod container;
+mod error;
 mod records;
 
 pub use cmd::CLI;
 
 pub const ROOT_PATH: &str = "/tmp/rtain";
+pub const SOCKET_PATH: &str = "/tmp/rtain_demons.sock";
 
 lazy_static! {
     static ref RECORD_MANAGER: ContainerManager = ContainerManager::init(ROOT_PATH)
         .expect("Fatal, failed to initialize the container manager");
 }
 
-pub fn daemon() -> std::io::Result<()> {
+pub fn daemon() {
+    if let Err(e) = task::block_on(run_daemon()) {
+        eprintln!("Error: {}", e);
+    }
+}
+
+async fn run_daemon() -> async_std::io::Result<()> {
     env::set_var("RUST_LOG", "debug");
     env_logger::init();
 
-    let socket_path = "/tmp/rtain_demons.sock";
-
     // Delete the old socket file
-    if fs::metadata(socket_path).is_ok() {
-        fs::remove_file(socket_path)?;
+    if std::fs::exists(SOCKET_PATH).is_ok() {
+        std::fs::remove_file(SOCKET_PATH)?;
     }
 
-    // Create the UNIX socket listener
-    let listener = UnixListener::bind(socket_path)?;
+    let listener = UnixListener::bind(SOCKET_PATH).await?;
+    let mut incomming = listener.incoming();
+
     info!(
         "[Daemon]: Daemon is running and listening on {}",
-        socket_path
+        SOCKET_PATH
     );
 
-    for stream in listener.incoming() {
+    while let Some(stream) = incomming.next().await {
         let stream = stream?;
-
         debug!("[Daemon]: Accepted client connection");
-        handler(stream)?;
+
+        handler(stream).await?;
     }
 
     info!("[Daemon]: Daemon is exiting");
     Ok(())
 }
 
-fn handler(stream: UnixStream) -> std::io::Result<()> {
-    let mut reader = BufReader::new(&stream);
+async fn handler(mut stream: UnixStream) -> async_std::io::Result<()> {
     let mut message = String::new();
 
-    reader.read_to_string(&mut message)?;
-    let cli: CLI = serde_json::from_str(&message).unwrap();
+    loop {
+        let size = stream.read_to_string(&mut message).await?;
+        if size == 0 {
+            // OK, connection done
+            debug!("[Daemon]: Client disconnected");
+            break;
+        }
+
+        let cli = serde_json::from_str::<CLI>(&message)?;
+        debug!("[Daemon] cli: {:#?}", cli);
+    }
 
     // match cli.command {
     //     Commands::Run(run_args) => run_container(run_args),

@@ -3,8 +3,7 @@ use log::{debug, error};
 
 use super::image::delete_workspace;
 use crate::core::cmd::RMArgs;
-use crate::core::RECORD_MANAGER;
-use crate::ROOT_PATH;
+use crate::core::{RECORD_MANAGER, ROOT_PATH};
 
 pub fn remove_container(rm_args: RMArgs) {
     let cr = match RECORD_MANAGER.get_record(&rm_args.name) {
