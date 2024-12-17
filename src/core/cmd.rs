@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[command(about = "rtain is a simple container runtime implemented in Rust.")]
 pub struct CLI {
     #[command(subcommand)]
-    command: Commands,
+    pub command: Commands,
 }
 
 #[derive(Subcommand, Debug, Serialize, Deserialize)]

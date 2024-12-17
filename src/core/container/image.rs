@@ -17,6 +17,7 @@ pub fn new_workspace(
     let root_path = Path::new(root_path);
     let mnt_path = Path::new(mnt_path);
 
+    // FIXME: clean up when failures.
     create_ro_layer(&image_path, &root_path)?;
     create_rw_layer(&root_path)?;
     create_mount_point(&root_path, &mnt_path)?;
@@ -127,7 +128,10 @@ pub fn delete_workspace(
     }
 
     delete_mount_point(mnt_path)?;
-    delete_write_layer(root_path)?;
+    delete_rw_layer(root_path)?;
+
+    // We shall delete the whole workspace (root).
+    fs::remove_dir_all(root_path)?;
 
     Ok(())
 }
@@ -142,7 +146,7 @@ fn delete_mount_point(mnt_path: &Path) -> Result<(), SimpleError> {
     Ok(())
 }
 
-fn delete_write_layer(root_path: &Path) -> Result<(), SimpleError> {
+fn delete_rw_layer(root_path: &Path) -> Result<(), SimpleError> {
     let write_dir = root_path.join("writeLayer");
     let work_dir = root_path.join("work");
 

@@ -1,16 +1,20 @@
 use std::{
     ffi::CString,
-    fs,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     path::Path,
-    process::exit,
 };
 
+use async_std::{
+    io::{ReadExt, WriteExt},
+    os::unix::net::{UnixListener, UnixStream},
+    stream::StreamExt,
+};
 use cgroups_rs::{cgroup_builder::CgroupBuilder, Cgroup, CgroupPid};
 use log::{debug, error, info};
 use nix::{
     libc::SIGCHLD,
     mount::{mount, umount2, MntFlags, MsFlags},
+    pty::openpty,
     sched::{clone, CloneFlags},
     sys::wait::waitpid,
     unistd::{chdir, dup2, execvp, pipe, pivot_root, read, write, Pid},
@@ -27,13 +31,14 @@ use super::image::new_workspace;
 
 /// When run a container command, it first creates a new container process
 /// and then runs the command.
-pub fn run_container(run_args: RunArgs) {
+pub fn run_container(run_args: RunArgs, mut ctrl_stream: UnixStream) {
     // Create pipes
     let (read_fd, write_fd) = match pipe() {
         Ok((read_fd, write_fd)) => (read_fd, write_fd),
         Err(err) => {
             error!("Failed to create pipe: {:?}", err);
-            exit(-1);
+
+            return;
         }
     };
 
@@ -43,21 +48,21 @@ pub fn run_container(run_args: RunArgs) {
     let name_id = format!("{}-{}", name, id);
 
     let root_path = format!("{}/{}", ROOT_PATH, name_id);
-    let mnt_path = format!("{}/{}/mnt", root_path, name_id);
-
-    // If detach, we shall record the outputs in log file.
-    let log_path = if run_args.detach {
-        Some(format!("{}/{}/stdout.log", ROOT_PATH, name_id))
-    } else {
-        None
-    };
+    let mnt_path: String = format!("{}/{}/mnt", ROOT_PATH, name_id);
 
     // Create a new process with new namespaces
-    let child = match new_container_process(&mnt_path, &log_path, &run_args.command, read_fd) {
+    let (child, master_fd, slave_fd) = match new_container_process(
+        &root_path,
+        &mnt_path,
+        read_fd,
+        run_args.detach,
+        false,
+        &run_args.command,
+    ) {
         Ok(child) => child,
         Err(err) => {
             error!("Failed to create new namespace process: {:?}", err);
-            exit(-1);
+            return;
         }
     };
 
@@ -71,7 +76,7 @@ pub fn run_container(run_args: RunArgs) {
             write(&write_fd, b"EXIT").unwrap();
             let _ = waitpid(child, None);
 
-            exit(-1);
+            return;
         }
     };
 
@@ -84,7 +89,7 @@ pub fn run_container(run_args: RunArgs) {
         let _ = waitpid(child, None);
         let _ = cg.delete();
 
-        exit(-1);
+        return;
     }
 
     // Form the container record.
@@ -97,29 +102,98 @@ pub fn run_container(run_args: RunArgs) {
     );
     RECORD_MANAGER.register(cr);
 
-    // Let the init to continue.
-    write(&write_fd, b"CONT").unwrap();
-
+    // Ok before we continue, we need to check the stdio redirection.
     if !run_args.detach {
-        match waitpid(child, None) {
-            Ok(status) => {
-                info!("Child process exited with status: {:?}", status);
-                // Record it as stoped.
-                let _ = RECORD_MANAGER.set_status(&id, ContainerStatus::Stopped);
-            }
-            Err(err) => {
-                error!("Failed to wait for child process: {:?}", err);
-            }
-        }
-    }
-    // Or detach from its child, but we still need to monitor it.
+        debug!("[Daemon]: Redirecting stdio to PTY");
+        nix::unistd::close(slave_fd).unwrap();
 
-    // TODO: write a demon process as manager.
+        let data_socket_path = format!("{root_path}/data.sock");
+
+        // Wrappting the master_fd into File.
+        let master = unsafe { async_std::fs::File::from_raw_fd(master_fd) };
+        async_std::task::block_on(async move {
+            let listener = match UnixListener::bind(&data_socket_path).await {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("Failed to bind data socket: {}", e);
+                    return;
+                }
+            };
+            let mut incomming = listener.incoming();
+
+            // Send new data socket path to the client.
+            ctrl_stream
+                .write_all(data_socket_path.as_bytes())
+                .await
+                .unwrap();
+
+            if let Some(Ok(data_stream)) = incomming.next().await {
+                // Client to PTY (sdtin).
+                let mut from_client = data_stream.clone();
+                let mut to_master = master.clone();
+
+                let write_task = async_std::task::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        match from_client.read(&mut buf).await {
+                            Ok(0) => {
+                                debug!(
+                                    "[Daemon] Client disconnected from data socket (write task)"
+                                );
+                                break;
+                            }
+                            Ok(n) => {
+                                to_master.write_all(&buf[..n]).await.unwrap();
+                            }
+                            Err(e) => {
+                                error!("[Daemon] Failed to read from data socket: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                // PTY to Client (stdout).
+                let mut from_master = master.clone();
+                let mut to_client = data_stream.clone();
+                let read_task = async_std::task::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        match from_master.read(&mut buf).await {
+                            Ok(0) => {
+                                debug!("[Daemon] PTY closed (read task)");
+                                break;
+                            }
+                            Ok(n) => {
+                                to_client.write_all(&buf[..n]).await.unwrap();
+                            }
+                            Err(e) => {
+                                error!("[Daemon] Failed to read from PTY: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                // Let the init to continue.
+                write(&write_fd, b"CONT").unwrap();
+
+                // Wait for the tasks.
+                let _ = write_task.await;
+                let _ = read_task.await;
+            }
+        });
+        // Client to PTY
+    } else {
+        // Or simply run the container
+        write(&write_fd, b"CONT").unwrap();
+    }
 }
 
 /// This is the first process in the new namespace.
-fn do_init(root: &str, command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
-    setup_mount(root)?;
+fn do_init(mnt_path: &str, command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    // FIXME: can we setup the mount first ?
+    setup_mount(mnt_path)?;
 
     let command_cstr = CString::new(command[0].clone())?;
     let args_cstr: Vec<CString> = command
@@ -136,11 +210,13 @@ fn do_init(root: &str, command: &Vec<String>) -> Result<(), Box<dyn std::error::
 /// Create a new process with new namespaces.
 /// This process will then do the initialization.
 fn new_container_process(
+    root_path: &str,
     mnt_path: &str,
-    log_path: &Option<String>,
-    command: &Vec<String>,
     read_fd: OwnedFd,
-) -> Result<Pid, Box<dyn std::error::Error>> {
+    detach: bool,
+    _interactive: bool,
+    command: &Vec<String>,
+) -> Result<(Pid, i32, i32), Box<dyn std::error::Error>> {
     let flags = CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWNS
@@ -150,9 +226,56 @@ fn new_container_process(
     const STACK_SIZE: usize = 1 * 1024 * 1024;
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];
 
-    // Child function
+    let (master_fd, slave_fd) = if !detach {
+        // If not detach, we have to use the PTY to redirect the stdio.
+        // FIXME: lift pty up.
+        let pty = openpty(None, None)?;
+        (pty.master.as_raw_fd(), pty.slave.as_raw_fd())
+    } else {
+        (-1, -1)
+    };
+
+    debug!("[Daemon] master_fd: {}, slave_fd: {}", master_fd, slave_fd);
+
     let child_func = || {
-        // Wait for cgroups setting
+        let setup_stdio = || -> Result<(), Box<dyn std::error::Error>> {
+            if !detach {
+                // nix::unistd::close(master_fd.as_raw_fd())?;
+
+                // // Redirect stdio.
+                // dup2(slave_fd.as_raw_fd(), nix::libc::STDIN_FILENO)?;
+                // dup2(slave_fd.as_raw_fd(), nix::libc::STDOUT_FILENO)?;
+                // dup2(slave_fd.as_raw_fd(), nix::libc::STDERR_FILENO)?;
+
+                // nix::unistd::close(slave_fd.as_raw_fd())?;
+
+                nix::unistd::close(master_fd.as_raw_fd()).unwrap();
+
+                // Redirect stdio.
+                dup2(slave_fd.as_raw_fd(), nix::libc::STDIN_FILENO).unwrap();
+                dup2(slave_fd.as_raw_fd(), nix::libc::STDOUT_FILENO).unwrap();
+                dup2(slave_fd.as_raw_fd(), nix::libc::STDERR_FILENO).unwrap();
+
+                nix::unistd::close(slave_fd.as_raw_fd()).unwrap();
+            } else {
+                let log_file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .append(true)
+                    .open(format!("{root_path}/stdout.log"))?;
+
+                dup2(log_file.as_raw_fd(), nix::libc::STDOUT_FILENO)?;
+            }
+
+            Ok(())
+        };
+
+        if let Err(e) = setup_stdio() {
+            error!("Failed to initialize container: {:?}", e);
+            return -1;
+        }
+
+        // Wait for cgroups and workspaces setting
         let mut buffer = [0u8; 4];
         read(read_fd.as_raw_fd(), &mut buffer).unwrap();
 
@@ -165,28 +288,12 @@ fn new_container_process(
             }
         }
 
-        // Stdio redirection
-        if let Some(log_path) = log_path {
-            let log_file = match fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .append(true)
-                .open(log_path)
-            {
-                Ok(file) => file,
-                Err(e) => {
-                    error!("Failed to open log file: {:?}", e);
-                    return -1;
-                }
-            };
-
-            let _ = dup2(log_file.as_raw_fd(), 1);
-        }
-
         if let Err(e) = do_init(mnt_path, command) {
             error!("Failed to initialize container: {:?}", e);
             return -1;
         }
+
+        // FIXME: test on child crash.
 
         return 0;
     };
@@ -194,7 +301,7 @@ fn new_container_process(
     // This new process will run `child_func`
     let child_pid = unsafe { clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) }?;
 
-    Ok(child_pid)
+    Ok((child_pid, master_fd, slave_fd))
 }
 
 fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, Box<dyn std::error::Error>> {
@@ -228,7 +335,7 @@ fn setup_mount(mnt_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Mount new proc fs
     if !Path::new("/proc").exists() {
-        fs::create_dir("/proc")?;
+        std::fs::create_dir("/proc")?;
     }
 
     mount(
@@ -256,7 +363,7 @@ fn switch_root(root: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a new directory to save the old root
     let pivot_dir = format!("{}/.pivot_root", root);
-    fs::create_dir_all(&pivot_dir)?;
+    std::fs::create_dir_all(&pivot_dir)?;
 
     // Execute `pivot_root` to switch the new root to `root`
     pivot_root(root, pivot_dir.as_str())?;
@@ -269,7 +376,7 @@ fn switch_root(root: &str) -> Result<(), Box<dyn std::error::Error>> {
     umount2(pivot_dir_old, MntFlags::MNT_DETACH)?;
 
     // Remove the old root
-    fs::remove_dir_all(pivot_dir_old)?;
+    std::fs::remove_dir_all(pivot_dir_old)?;
 
     Ok(())
 }

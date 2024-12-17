@@ -43,8 +43,13 @@ impl ContainerManager {
             root_path: PathBuf::from(root_path),
         };
 
-        // Load records from disk
-        manager.sync_from_disk()?;
+        // Load records from disk if exist
+        let record_path = manager.root_path.join("records.json");
+        if record_path.exists() {
+            manager.sync_from_disk()?;
+        } else {
+            manager.sync_to_disk()?;
+        }
         Ok(manager)
     }
 

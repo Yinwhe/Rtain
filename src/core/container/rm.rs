@@ -51,7 +51,5 @@ pub fn remove_container(rm_args: RMArgs) {
     }
 
     debug!("Deregister container: {:?}", &cr.name);
-    RECORD_MANAGER.deregister(&cr.id);
-
-    // FIXME: Shall we delete the whole workspace ?
+    RECORD_MANAGER.deregister(&cr.id);    
 }
