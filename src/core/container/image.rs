@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use log::{debug, info};
+use log::debug;
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 
 use crate::core::error::SimpleError;
@@ -17,19 +17,35 @@ pub fn new_workspace(
     let root_path = Path::new(root_path);
     let mnt_path = Path::new(mnt_path);
 
-    // FIXME: clean up when failures.
     create_ro_layer(&image_path, &root_path)?;
-    create_rw_layer(&root_path)?;
-    create_mount_point(&root_path, &mnt_path)?;
+    create_rw_layer(&root_path).map_err(|e| {
+        // Clean up the ro layer.
+        let _ = fs::remove_dir_all(root_path);
+        e
+    })?;
+    create_mount_point(&root_path, &mnt_path).map_err(|e| {
+        let _ = fs::remove_dir_all(root_path);
+        e
+    })?;
 
     if let Some(vol) = volume {
         let sv = vol.split(":").collect::<Vec<&str>>();
         if sv.len() == 2 && !sv[0].is_empty() && !sv[1].is_empty() {
-            mount_volume(&mnt_path, sv)?;
+            mount_volume(&mnt_path, sv).map_err(|e| {
+                let _ = Command::new("umount").arg(mnt_path).status();
+                let _ = fs::remove_dir_all(root_path);
+
+                e
+            })?;
         } else {
+            let _ = Command::new("umount").arg(mnt_path).status();
+            let _ = fs::remove_dir_all(root_path);
+
             return Err(format!("Invalid volume: {}", vol).into());
         }
     }
+
+    debug!("[Daemon] Workspace created under {:?}", root_path);
 
     Ok(())
 }
@@ -41,22 +57,18 @@ fn create_ro_layer(image_path: &Path, root_path: &Path) -> Result<(), SimpleErro
     if !image_dir.exists() {
         fs::create_dir_all(&image_dir)?;
 
-        let status = Command::new("tar")
+        let output = Command::new("tar")
             .arg("-xvf")
             .arg(&image_path)
             .arg("-C")
             .arg(&image_dir)
             .stdout(Stdio::null())
-            .status()?;
+            .output()?;
 
-        if status.success() {
-            debug!("Unpacked image to {:?}", image_dir);
-        } else {
-            return Err("Failed to unpack image".into());
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).into());
         }
     }
-
-    debug!("Read-only layer at {:?}", image_dir);
 
     Ok(())
 }
@@ -65,11 +77,8 @@ fn create_ro_layer(image_path: &Path, root_path: &Path) -> Result<(), SimpleErro
 fn create_rw_layer(root_path: &Path) -> Result<(), SimpleError> {
     let write_dir = root_path.join("writeLayer");
     if !write_dir.exists() {
-        debug!("Create write layer dir: {:?}", write_dir);
         fs::create_dir_all(&write_dir)?;
     }
-
-    debug!("Read-write layer at {:?}", write_dir);
 
     Ok(())
 }
@@ -94,19 +103,17 @@ fn create_mount_point(root_path: &Path, mnt_path: &Path) -> Result<(), SimpleErr
         workdir.display()
     );
 
-    debug!("Mounting overlay filesystem to {:?}", mnt_path);
-
-    let status = Command::new("mount")
+    let output = Command::new("mount")
         .arg("-t")
         .arg("overlay")
         .arg("overlay")
         .arg("-o")
         .arg(mount_option)
         .arg(mnt_path)
-        .status()?;
+        .output()?;
 
-    if !status.success() {
-        return Err("Failed to mount overlay filesystem".into());
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).into());
     }
 
     Ok(())
@@ -127,46 +134,19 @@ pub fn delete_workspace(
         umount_volume(mnt_path, sv)?;
     }
 
-    delete_mount_point(mnt_path)?;
-    delete_rw_layer(root_path)?;
-
-    // We shall delete the whole workspace (root).
+    // Unmount the overlay filesystem.
+    Command::new("umount").arg(mnt_path).status()?;
+    // And simply delete the whole directory.
     fs::remove_dir_all(root_path)?;
 
     Ok(())
 }
 
-fn delete_mount_point(mnt_path: &Path) -> Result<(), SimpleError> {
-    debug!("Unmounted {:?}", mnt_path);
-    Command::new("umount").arg(mnt_path).status()?;
-
-    debug!("Deleted mount point at {:?}", mnt_path);
-    fs::remove_dir_all(mnt_path)?;
-
-    Ok(())
-}
-
-fn delete_rw_layer(root_path: &Path) -> Result<(), SimpleError> {
-    let write_dir = root_path.join("writeLayer");
-    let work_dir = root_path.join("work");
-
-    debug!("Deleted write layer at {:?}", write_dir);
-    fs::remove_dir_all(&write_dir)?;
-
-    debug!("Deleted work dir at {:?}", work_dir);
-    fs::remove_dir_all(&work_dir)?;
-
-    Ok(())
-}
-
 fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> Result<(), SimpleError> {
-    info!("Mounting volume: {:?}", volume_path);
+    debug!("[Daemon] Mounting volume: {:?}", volume_path);
 
     let hostv = Path::new(volume_path[0]);
     let contv = mnt_path.join(volume_path[1].strip_prefix("/").unwrap());
-
-    debug!("Host volume: {:?}", hostv);
-    debug!("Container volume: {:?}", contv);
 
     if !hostv.exists() {
         fs::create_dir_all(hostv)?;
@@ -187,14 +167,10 @@ fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> Result<(), SimpleErr
     Ok(())
 }
 
-fn umount_volume(
-    mnt_path: &Path,
-    volume_path: Vec<&str>,
-) -> Result<(), SimpleError> {
-    info!("Unmounting volume: {:?}", volume_path);
+fn umount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> Result<(), SimpleError> {
+    debug!("[Daemon] Unmounting volume: {:?}", volume_path);
 
     let contv = mnt_path.join(volume_path[1].strip_prefix("/").unwrap());
-    debug!("Container volume: {:?}", contv);
 
     umount2(&contv, MntFlags::MNT_DETACH)?;
 

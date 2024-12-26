@@ -1,24 +1,25 @@
 use std::env;
 
-use async_std::{
-    io::ReadExt,
-    os::unix::net::{UnixListener, UnixStream},
-    stream::StreamExt,
-    task,
-};
 use cmd::Commands;
 use lazy_static::lazy_static;
 use log::{debug, info};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    net::{UnixListener, UnixStream},
+    task,
+};
 
 mod cmd;
 mod container;
 mod error;
 mod records;
+mod response;
 
 use container::*;
 use records::ContainerManager;
 
 pub use cmd::CLI;
+pub use response::Response;
 
 pub const ROOT_PATH: &str = "/tmp/rtain";
 pub const SOCKET_PATH: &str = "/tmp/rtain_demons.sock";
@@ -28,13 +29,7 @@ lazy_static! {
         .expect("Fatal, failed to initialize the container manager");
 }
 
-pub fn daemon() {
-    if let Err(e) = task::block_on(run_daemon()) {
-        eprintln!("Error: {}", e);
-    }
-}
-
-async fn run_daemon() -> async_std::io::Result<()> {
+async fn run_daemon() -> tokio::io::Result<()> {
     env::set_var("RUST_LOG", "debug");
     env_logger::init();
 
@@ -43,51 +38,62 @@ async fn run_daemon() -> async_std::io::Result<()> {
         std::fs::remove_file(SOCKET_PATH)?;
     }
 
-    let listener = UnixListener::bind(SOCKET_PATH).await?;
-    let mut incomming = listener.incoming();
+    let listener = UnixListener::bind(SOCKET_PATH)?;
 
     info!(
         "[Daemon]: Daemon is running and listening on {}",
         SOCKET_PATH
     );
 
-    while let Some(stream) = incomming.next().await {
-        let stream = stream?;
+    while let Ok((stream, _addr)) = listener.accept().await {
         debug!("[Daemon]: Accepted client connection");
 
         // FIXME: sync and resource shall be taken care.
-        let _handler = task::block_on(handler(stream));
+        let _handler = task::spawn(handler(stream));
     }
 
     info!("[Daemon]: Daemon is exiting");
     Ok(())
 }
 
-async fn handler(mut stream: UnixStream) -> async_std::io::Result<()> {
+async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
     let mut message = String::new();
+    let mut bufreader = BufReader::new(&mut stream);
 
-    loop {
-        let size = stream.read_to_string(&mut message).await?;
-        if size == 0 {
-            // OK, connection done
-            break;
-        }
+    let size = bufreader.read_line(&mut message).await?;
 
-        let cli = serde_json::from_str::<CLI>(&message)?;
-
-        match cli.command {
-            Commands::Run(run_args) => run_container(run_args, stream.clone()),
-            // Commands::Start(start_args) => start_container(start_args),
-            // Commands::Exec(exec_args) => exec_container(exec_args),
-            // Commands::Stop(stop_args) => stop_container(stop_args),
-            // Commands::RM(rm_args) => remove_container(rm_args),
-            // Commands::PS(ps_args) => list_containers(ps_args),
-            // Commands::Logs(logs_args) => show_logs(logs_args),
-            // Commands::Commit(commit_args) => container::commit_container(commit_args),
-            _ => unimplemented!(),
-        }
+    if size == 0 {
+        debug!("[Daemon]: No data received, is client dead?");
+        return Ok(());
     }
 
-    debug!("[Daemon]: Client disconnected");
+    let cli = serde_json::from_str::<CLI>(&message)?;
+
+    debug!("Received command: {:?}", cli);
+
+    let response = match cli.command {
+        Commands::Run(run_args) => run_container(run_args, stream).await?,
+        // Commands::Start(start_args) => start_container(start_args),
+        // Commands::Exec(exec_args) => exec_container(exec_args),
+        // Commands::Stop(stop_args) => stop_container(stop_args),
+        // Commands::RM(rm_args) => remove_container(rm_args),
+        // Commands::PS(ps_args) => list_containers(ps_args),
+        // Commands::Logs(logs_args) => show_logs(logs_args),
+        // Commands::Commit(commit_args) => container::commit_container(commit_args),
+        _ => unimplemented!(),
+    };
+
+    debug!("[Daemon]: Task done, daemon disconnected");
     Ok(())
+}
+
+pub fn daemon() {
+    if let Err(e) = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_daemon())
+    {
+        eprintln!("Error: {}", e);
+    }
 }
