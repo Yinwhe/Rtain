@@ -36,7 +36,7 @@ async fn run_client() -> tokio::io::Result<()> {
     }
 
     let resp: Response = serde_json::from_str(&response)?;
-    if resp.is_cont() {
+    if resp.is_continue() {
         let (mut reader, mut writer) = stream.into_split();
         // Read stdin and send to daemon.
         let write_to_daemon = tokio::spawn(async move {

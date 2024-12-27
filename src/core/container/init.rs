@@ -12,7 +12,8 @@ use nix::{
     mount::{mount, umount2, MntFlags, MsFlags},
     pty::{openpty, OpenptyResult},
     sched::{clone, CloneFlags},
-    unistd::{chdir, close, dup2, execvp, pipe, pivot_root, read, write, Pid},
+    sys::wait::waitpid,
+    unistd::{chdir, dup2, execvp, pipe, pivot_root, read, write, Pid},
 };
 use rand::{thread_rng, Rng};
 use tokio::{
@@ -34,7 +35,7 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) -> tokio::io::
     // FIXME: change error formats.
     let (mut client_reader, mut client_writer) = stream.into_split();
 
-    let (pty, pipe, _root_path) = match run_prepare(&run_args) {
+    let (pty, pipe, child) = match run_prepare(&run_args) {
         Ok(res) => res,
         Err(e) => {
             error!("Failed to run container: {:?}", e);
@@ -46,11 +47,11 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) -> tokio::io::
     if let Some(pty) = pty {
         debug!("[Daemon]: Redirecting stdio to PTY");
 
+        let _slave_fd = pty.slave;
         let master_fd = Arc::new(pty.master);
-        close(pty.slave.as_raw_fd()).unwrap();
 
         // Inform the clients here.
-        let mut resp = serde_json::to_string(&Response::CONT).unwrap();
+        let mut resp = serde_json::to_string(&Response::Continue).unwrap();
         resp.push('\n');
         client_writer.write_all(resp.as_bytes()).await.unwrap();
 
@@ -65,14 +66,11 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) -> tokio::io::
                         // debug!("Read from pty, send: {}", String::from_utf8_lossy(&buffer[..n]));
 
                         if let Err(e) = client_writer.write_all(&buffer[..n]).await {
-                            eprintln!("Error writing to client: {}", e);
+                            error!("Error writing to client: {}", e);
                             break;
                         }
                     }
-                    Err(e) => {
-                        error!("Error reading from PTY: {}", e);
-                        break;
-                    }
+                    Err(_e) => break,
                 }
             }
         });
@@ -100,26 +98,38 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) -> tokio::io::
             }
         });
 
-        write(&pipe.1, b"CONT").unwrap();
-        close(pipe.0.as_raw_fd()).unwrap();
-        close(pipe.1.as_raw_fd()).unwrap();
+        // Child exits watcher
+        let child_exit = tokio::spawn(async move {
+            let _ = waitpid(child, None);
+        });
 
-        let _ = tokio::join!(read_from_pty, write_to_pty);
-        close(master_fd.as_raw_fd()).unwrap();
+        write(&pipe.1, b"CONT").unwrap();
+
+        tokio::select! {
+            _ = write_to_pty => {
+                debug!("Write to PTY finished, means the client exits");
+            }
+            _ = child_exit => {
+                debug!("Child process exited");
+            }
+        }
+        read_from_pty.abort();
+
+        // FIXME: What shall we do when exits.
+
+        // std::thread::sleep(std::time::Duration::from_secs(1));
+        // So here we detach from it.
     } else {
         debug!("[Daemon]: Detach, redirecting stdio to log file");
-
         write(&pipe.1, b"CONT").unwrap();
-        close(pipe.0.as_raw_fd()).unwrap();
-        close(pipe.1.as_raw_fd()).unwrap();
     }
 
-    Ok(Response::Ok("Container started".to_string()))
+    Ok(Response::Ok)
 }
 
 fn run_prepare(
     run_args: &RunArgs,
-) -> Result<(Option<OpenptyResult>, (OwnedFd, OwnedFd), String), Box<dyn std::error::Error>> {
+) -> Result<(Option<OpenptyResult>, (OwnedFd, OwnedFd), Pid), Box<dyn std::error::Error>> {
     // Generate name-id.
     let id = random_id();
     let name = run_args.name.clone().unwrap_or_else(|| id.clone());
@@ -165,9 +175,6 @@ fn run_prepare(
     // Wait for child ready.
     read(pipe.0.as_raw_fd(), &mut buf).unwrap();
     if buf == *b"EXIT" {
-        close(pipe.0.as_raw_fd()).unwrap();
-        close(pipe.1.as_raw_fd()).unwrap();
-
         // Child failed to initialize, clean up.
         delete_workspace(&root_path, &mnt_path, &run_args.volume)?;
 
@@ -179,9 +186,6 @@ fn run_prepare(
         Ok(cg) => cg,
         Err(e) => {
             write(&pipe.1, b"EXIT").unwrap();
-
-            close(pipe.0.as_raw_fd()).unwrap();
-            close(pipe.1.as_raw_fd()).unwrap();
 
             // CGroup error, clean up.
             delete_workspace(&root_path, &mnt_path, &run_args.volume)?;
@@ -200,7 +204,7 @@ fn run_prepare(
     );
     RECORD_MANAGER.register(cr);
 
-    Ok((pty, pipe, root_path))
+    Ok((pty, pipe, child))
 }
 
 /// This is the first process in the new namespace.
@@ -236,16 +240,13 @@ fn new_container_process(
     let child_func = || {
         let setup_stdio = || -> Result<(), Box<dyn std::error::Error>> {
             if let Some(pty) = pty {
-                let master_fd = &pty.master;
-                let slave_fd = &pty.slave;
+                let _master_fd = pty.master.try_clone()?;
+                let slave_fd = pty.slave.try_clone()?;
 
                 // Redirect stdio.
                 dup2(slave_fd.as_raw_fd(), nix::libc::STDIN_FILENO)?;
                 dup2(slave_fd.as_raw_fd(), nix::libc::STDOUT_FILENO)?;
                 dup2(slave_fd.as_raw_fd(), nix::libc::STDERR_FILENO)?;
-
-                close(master_fd.as_raw_fd())?;
-                close(slave_fd.as_raw_fd())?;
             } else {
                 let log_file = std::fs::OpenOptions::new()
                     .create(true)
@@ -262,9 +263,6 @@ fn new_container_process(
         if let Err(e) = setup_stdio() {
             write(pipe.1, b"EXIT").unwrap();
 
-            close(pipe.0.as_raw_fd()).unwrap();
-            close(pipe.1.as_raw_fd()).unwrap();
-
             error!("Container initializer failure: {:?}", e);
             return -1;
         }
@@ -272,9 +270,6 @@ fn new_container_process(
         // Switch root here.
         if let Err(e) = setup_mount(mnt_path) {
             write(pipe.1, b"EXIT").unwrap();
-
-            close(pipe.0.as_raw_fd()).unwrap();
-            close(pipe.1.as_raw_fd()).unwrap();
 
             error!("Container initializer failure: {:?}", e);
             return -1;
@@ -286,9 +281,6 @@ fn new_container_process(
         // Wait for parent ready.
         let mut buf = [0u8; 4];
         read(pipe.0.as_raw_fd(), &mut buf).unwrap();
-
-        close(pipe.0.as_raw_fd()).unwrap();
-        close(pipe.1.as_raw_fd()).unwrap();
 
         match &buf {
             b"EXIT" => {

@@ -2,14 +2,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
-    Ok(String),
-    CONT,
+    Ok,
+    OkContent(String),
+    Continue,
     Err(String),
 }
 impl Response {
-    pub fn is_cont(&self) -> bool {
+    pub fn is_continue(&self) -> bool {
         match self {
-            Self::CONT => true,
+            Self::Continue => true,
             _ => false,
         }
     }
