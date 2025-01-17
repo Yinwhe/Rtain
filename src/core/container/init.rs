@@ -12,17 +12,19 @@ use nix::{
     mount::{mount, umount2, MntFlags, MsFlags},
     pty::{openpty, OpenptyResult},
     sched::{clone, CloneFlags},
-    sys::wait::waitpid,
+    sys::wait::{waitpid, WaitStatus},
     unistd::{chdir, dup2, execvp, pipe, pivot_root, read, write, Pid},
 };
 use rand::{thread_rng, Rng};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
+    sync::Mutex,
 };
 
 use crate::core::{
     cmd::RunArgs,
+    error::SimpleError,
     records::{ContainerRecord, ContainerStatus},
     response::Response,
     RECORD_MANAGER, ROOT_PATH,
@@ -31,36 +33,78 @@ use crate::core::{
 use super::image::{delete_workspace, new_workspace};
 
 /// Run a new container from given image.
-pub async fn run_container(run_args: RunArgs, stream: UnixStream) -> tokio::io::Result<Response> {
-    // FIXME: change error formats.
-    let (mut client_reader, mut client_writer) = stream.into_split();
+pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
+    let (stream_reader, stream_writer) = stream.into_split();
+    let stream_reader = Arc::new(Mutex::new(stream_reader));
+    let stream_writer = Arc::new(Mutex::new(stream_writer));
 
-    let (pty, pipe, child) = match run_prepare(&run_args) {
+    let (pty, pipe, child, root_path) = match run_prepare(&run_args) {
         Ok(res) => res,
         Err(e) => {
             error!("Failed to run container: {:?}", e);
 
-            return Ok(Response::Err(format!("Failed to run container: {:?}", e)));
+            return;
         }
     };
 
-    if let Some(pty) = pty {
-        debug!("[Daemon]: Redirecting stdio to PTY");
+    let _slave_fd = pty.slave;
+    let master_fd = Arc::new(pty.master);
+    let mut log_file = match tokio::fs::File::options()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(format!("{}/log.log", root_path))
+        .await
+    {
+        Ok(f) => f,
+        Err(e) => {
+            error!("Failed to open log file: {:?}", e);
+            write(&pipe.1, b"EXIT").unwrap();
 
-        let _slave_fd = pty.slave;
-        let master_fd = Arc::new(pty.master);
+            return;
+        }
+    };
 
-        // Inform the clients here.
-        let mut resp = serde_json::to_string(&Response::Continue).unwrap();
-        resp.push('\n');
-        client_writer.write_all(resp.as_bytes()).await.unwrap();
+    let (container_reader, mut container_sender) = tokio::io::simplex(1);
+    let container_reader = Arc::new(Mutex::new(container_reader));
+
+    // Capture container outs.
+    let master_reader = Arc::clone(&master_fd);
+    let read_from_pty = tokio::spawn(async move {
+        let mut buffer = vec![0u8; 1024];
+        loop {
+            match read(master_reader.as_raw_fd(), &mut buffer) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    if let Err(e) = container_sender.write_all(&buffer[..n]).await {
+                        error!("Error writing to client: {}", e);
+                        break;
+                    }
+                }
+                Err(_e) => break,
+            }
+        }
+    });
+
+    write(&pipe.1, b"CONT").unwrap();
+
+    if !run_args.detach {
+        debug!("[Daemon]: Attach, redirecting stdio to PTY");
+
+        Response::Continue
+            .send_to(&mut *stream_writer.lock().await)
+            .await
+            .unwrap();
 
         // PTY writes to the client.
-        let master_reader = Arc::clone(&master_fd);
-        let read_from_pty = tokio::spawn(async move {
+        let client_writer = Arc::clone(&stream_writer);
+        let pty_reader = Arc::clone(&container_reader);
+        let pty_to_client = tokio::spawn(async move {
             let mut buffer = vec![0u8; 1024];
+            let mut client_writer = client_writer.lock().await;
+            let mut pty_reader = pty_reader.lock().await;
             loop {
-                match read(master_reader.as_raw_fd(), &mut buffer) {
+                match pty_reader.read(&mut buffer).await {
                     Ok(0) => break, // EOF
                     Ok(n) => {
                         // debug!("Read from pty, send: {}", String::from_utf8_lossy(&buffer[..n]));
@@ -77,8 +121,10 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) -> tokio::io::
 
         // Client writes to the pty.
         let master_writer = Arc::clone(&master_fd);
-        let write_to_pty = tokio::spawn(async move {
+        let client_reader = Arc::clone(&stream_reader);
+        let client_to_pty = tokio::spawn(async move {
             let mut buffer = vec![0u8; 1024];
+            let mut client_reader = client_reader.lock().await;
             loop {
                 match client_reader.read(&mut buffer).await {
                     Ok(0) => break, // EOF
@@ -99,37 +145,73 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) -> tokio::io::
         });
 
         // Child exits watcher
-        let child_exit = tokio::spawn(async move {
-            let _ = waitpid(child, None);
-        });
-
-        write(&pipe.1, b"CONT").unwrap();
+        let check_child_exit = tokio::spawn(async move { waitpid(child, None) });
 
         tokio::select! {
-            _ = write_to_pty => {
-                debug!("Write to PTY finished, means the client exits");
+            _ = client_to_pty => {
+                // Write to PTY finished, client exits.
+                pty_to_client.abort();
+                // But the container is still running, so we just detach.
+                // That is, continue to run the detach codes.
             }
-            _ = child_exit => {
-                debug!("Child process exited");
+            wait_res = check_child_exit => {
+                // Child process exited.
+                debug!("[Daemon]: Container exited");
+
+                // The container exit, inform the client.
+                pty_to_client.abort();
+                let resp = match wait_res.unwrap() {
+                    Ok(status) => {
+                        match status {
+                            WaitStatus::Exited(_, code) => {
+                                Response::OkContent(format!(
+                                    "Container exited with code: {}",
+                                    code
+                                ))
+                            }
+                            _ => unimplemented!("Other wait status are not implemented currently"),
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error waiting for child: {:?}", e);
+                        Response::Err(format!("Error waiting for child: {:?}", e))
+                    }
+                };
+                resp.send_to(&mut *stream_writer.lock().await).await.unwrap();
+
+                return ;
             }
         }
-        read_from_pty.abort();
-
-        // FIXME: What shall we do when exits.
-
-        // std::thread::sleep(std::time::Duration::from_secs(1));
-        // So here we detach from it.
-    } else {
-        debug!("[Daemon]: Detach, redirecting stdio to log file");
-        write(&pipe.1, b"CONT").unwrap();
     }
 
-    Ok(Response::Ok)
+    debug!("[Daemon]: Detach, redirecting stdio to log file");
+    // TODO: Implement log file redirection.
+    let pty_to_log = tokio::spawn(async move {
+        let mut buffer = vec![0u8; 1024];
+        let mut pty_reader = container_reader.lock().await;
+        loop {
+            match pty_reader.read(&mut buffer).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    log_file.write_all(&buffer[..n]).await.unwrap();
+                }
+                Err(_e) => break,
+            }
+        }
+    });
+
+    // Child exits watcher
+    let check_child_exit = tokio::spawn(async move { waitpid(child, None) });
+
+    let _ = tokio::join!(check_child_exit);
+
+    read_from_pty.abort();
+    pty_to_log.abort();
 }
 
 fn run_prepare(
     run_args: &RunArgs,
-) -> Result<(Option<OpenptyResult>, (OwnedFd, OwnedFd), Pid), Box<dyn std::error::Error>> {
+) -> Result<(OpenptyResult, (OwnedFd, OwnedFd), Pid, String), SimpleError> {
     // Generate name-id.
     let id = random_id();
     let name = run_args.name.clone().unwrap_or_else(|| id.clone());
@@ -141,13 +223,9 @@ fn run_prepare(
     let mnt_path = format!("{}/{}/mnt", ROOT_PATH, name_id);
 
     // If not detach, we need to stream the container io to clients.
-    let pty = if !run_args.detach {
-        Some(openpty(None, None)?)
-    } else {
-        None
-    };
+    let pty = openpty(None, None)?;
 
-    // Sync between daemon and new child process.
+    // Sync between daemon and new child process (container).
     let pipe_p = pipe()?;
     let pipe_c = pipe()?;
     let pipe = (pipe_p.0, pipe_c.1);
@@ -157,20 +235,15 @@ fn run_prepare(
     new_workspace(&run_args.image, &root_path, &mnt_path, &run_args.volume)?;
 
     // Create a new process with new namespaces.
-    let child = match new_container_process(
-        &root_path,
-        &mnt_path,
-        (&pipe_c.0, &pipe_p.1),
-        pty.as_ref(),
-        &run_args.command,
-    ) {
-        Ok(child) => child,
-        Err(e) => {
-            // Clone child failure, clean up.
-            delete_workspace(&root_path, &mnt_path, &run_args.volume)?;
-            return Err(e);
-        }
-    };
+    let child =
+        match new_container_process(&mnt_path, (&pipe_c.0, &pipe_p.1), &pty, &run_args.command) {
+            Ok(child) => child,
+            Err(e) => {
+                // Clone child failure, clean up.
+                delete_workspace(&root_path, &mnt_path, &run_args.volume)?;
+                return Err(e);
+            }
+        };
 
     // Wait for child ready.
     read(pipe.0.as_raw_fd(), &mut buf).unwrap();
@@ -204,11 +277,11 @@ fn run_prepare(
     );
     RECORD_MANAGER.register(cr);
 
-    Ok((pty, pipe, child))
+    Ok((pty, pipe, child, root_path))
 }
 
 /// This is the first process in the new namespace.
-fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn do_init(command: &Vec<String>) -> Result<(), SimpleError> {
     let command_cstr = CString::new(command[0].clone())?;
     let args_cstr: Vec<CString> = command
         .iter()
@@ -223,12 +296,11 @@ fn do_init(command: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Create a new process with new namespaces and return its pid.
 fn new_container_process(
-    root_path: &str,
     mnt_path: &str,
     pipe: (&OwnedFd, &OwnedFd),
-    pty: Option<&OpenptyResult>,
+    pty: &OpenptyResult,
     command: &Vec<String>,
-) -> Result<Pid, Box<dyn std::error::Error>> {
+) -> Result<Pid, SimpleError> {
     let flags = CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWNS
@@ -238,24 +310,14 @@ fn new_container_process(
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];
 
     let child_func = || {
-        let setup_stdio = || -> Result<(), Box<dyn std::error::Error>> {
-            if let Some(pty) = pty {
-                let _master_fd = pty.master.try_clone()?;
-                let slave_fd = pty.slave.try_clone()?;
+        let setup_stdio = || -> Result<(), SimpleError> {
+            let _master_fd = pty.master.try_clone()?;
+            let slave_fd = pty.slave.try_clone()?;
 
-                // Redirect stdio.
-                dup2(slave_fd.as_raw_fd(), nix::libc::STDIN_FILENO)?;
-                dup2(slave_fd.as_raw_fd(), nix::libc::STDOUT_FILENO)?;
-                dup2(slave_fd.as_raw_fd(), nix::libc::STDERR_FILENO)?;
-            } else {
-                let log_file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .append(true)
-                    .open(format!("{root_path}/stdout.log"))?;
-
-                dup2(log_file.as_raw_fd(), nix::libc::STDOUT_FILENO)?;
-            }
+            // Redirect stdio.
+            dup2(slave_fd.as_raw_fd(), nix::libc::STDIN_FILENO)?;
+            dup2(slave_fd.as_raw_fd(), nix::libc::STDOUT_FILENO)?;
+            dup2(slave_fd.as_raw_fd(), nix::libc::STDERR_FILENO)?;
 
             Ok(())
         };
@@ -305,7 +367,7 @@ fn new_container_process(
     Ok(child_pid)
 }
 
-fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, Box<dyn std::error::Error>> {
+fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, SimpleError> {
     let hier = cgroups_rs::hierarchies::auto();
     let cg = match CgroupBuilder::new(&cg_name).build(hier) {
         Ok(cg) => cg,
@@ -321,7 +383,7 @@ fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, Box<dyn std::error:
     }
 }
 
-fn setup_mount(mnt_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn setup_mount(mnt_path: &str) -> Result<(), SimpleError> {
     // Make the mount namespace private
     mount(
         None::<&str>,
@@ -350,7 +412,7 @@ fn setup_mount(mnt_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn switch_root(root: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn switch_root(root: &str) -> Result<(), SimpleError> {
     debug!("Switch root to: {}", root);
 
     // Mount new root to cover the old root

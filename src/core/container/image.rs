@@ -139,6 +139,8 @@ pub fn delete_workspace(
     // And simply delete the whole directory.
     fs::remove_dir_all(root_path)?;
 
+    debug!("[Daemon] Workspace deleted under {:?}", root_path);
+
     Ok(())
 }
 

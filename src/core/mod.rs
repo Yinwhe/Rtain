@@ -1,6 +1,5 @@
 use std::env;
 
-use cmd::Commands;
 use lazy_static::lazy_static;
 use log::{debug, info};
 use tokio::{
@@ -18,8 +17,8 @@ mod response;
 use container::*;
 use records::ContainerManager;
 
-pub use cmd::CLI;
-pub use response::Response;
+pub use cmd::*;
+pub use response::*;
 
 pub const ROOT_PATH: &str = "/tmp/rtain";
 pub const SOCKET_PATH: &str = "/tmp/rtain_demons.sock";
@@ -58,12 +57,11 @@ async fn run_daemon() -> tokio::io::Result<()> {
 
 async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
     let mut message = String::new();
+
     let mut bufreader = BufReader::new(&mut stream);
-
     let size = bufreader.read_line(&mut message).await?;
-
     if size == 0 {
-        debug!("[Daemon]: No data received, is client dead?");
+        info!("[Daemon]: No data received, is client dead?");
         return Ok(());
     }
 
@@ -71,8 +69,8 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
 
     debug!("Received command: {:?}", cli);
 
-    let response = match cli.command {
-        Commands::Run(run_args) => run_container(run_args, stream).await?,
+    match cli.command {
+        Commands::Run(run_args) => run_container(run_args, stream).await,
         // Commands::Start(start_args) => start_container(start_args),
         // Commands::Exec(exec_args) => exec_container(exec_args),
         // Commands::Stop(stop_args) => stop_container(stop_args),
