@@ -1,7 +1,7 @@
 use std::env;
 
 use lazy_static::lazy_static;
-use log::{debug, info};
+use log::{debug, error, info};
 use tokio::{
     net::{UnixListener, UnixStream},
     task,
@@ -46,7 +46,6 @@ async fn run_daemon() -> tokio::io::Result<()> {
     while let Ok((stream, _addr)) = listener.accept().await {
         debug!("[Daemon]: Accepted client connection");
 
-        // FIXME: sync and resource shall be taken care.
         let _handler = task::spawn(handler(stream));
     }
 
@@ -55,19 +54,26 @@ async fn run_daemon() -> tokio::io::Result<()> {
 }
 
 async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
-    let msg = Msg::recv_from(&mut stream).await.unwrap();
+    let msg = match Msg::recv_from(&mut stream).await {
+        Ok(msg) => msg,
+        Err(e) => {
+            error!("[Daemon] failed to get msg: {:?}", e);
+            return Err(e);
+        }
+    };
+
     debug!("Received msg: {:?}", msg);
 
     let cli = msg.get_req().unwrap();
 
     match cli.command {
         Commands::Run(run_args) => run_container(run_args, stream).await,
-        // Commands::Start(start_args) => start_container(start_args),
+        Commands::Start(start_args) => start_container(start_args, stream).await,
         // Commands::Exec(exec_args) => exec_container(exec_args),
-        // Commands::Stop(stop_args) => stop_container(stop_args),
+        Commands::Stop(stop_args) => stop_container(stop_args).await,
         // Commands::RM(rm_args) => remove_container(rm_args),
-        // Commands::PS(ps_args) => list_containers(ps_args),
-        // Commands::Logs(logs_args) => show_logs(logs_args),
+        Commands::PS(ps_args) => list_containers(ps_args, stream).await,
+        Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
         // Commands::Commit(commit_args) => container::commit_container(commit_args),
         _ => unimplemented!(),
     };

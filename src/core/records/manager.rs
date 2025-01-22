@@ -14,8 +14,8 @@ use crate::core::error::SimpleError;
 pub struct ContainerRecord {
     pub id: String,
     pub name: String,
-    pub pid: String,
-    pub command: String,
+    pub pid: i32,
+    pub command: Vec<String>,
     pub status: ContainerStatus,
 }
 
@@ -88,16 +88,16 @@ impl ContainerManager {
         records.values().cloned().collect()
     }
 
-    pub fn set_status(&self, id: &str, status: ContainerStatus) -> Result<(), SimpleError> {
+    pub fn set_status(&self, id: &str, status: ContainerStatus) {
         let mut records = self.records.write().unwrap();
-        match records.get_mut(id) {
-            Some(record) => {
-                record.status = status;
-            }
-            None => return Err(format!("No container found with id: {}", id).into()),
-        }
 
-        Ok(())
+        records.get_mut(id).unwrap().status = status;
+    }
+
+    pub fn set_pid(&self, id: &str, pid: i32) {
+        let mut records = self.records.write().unwrap();
+
+        records.get_mut(id).unwrap().pid = pid;
     }
 
     fn sync_from_disk(&self) -> Result<(), SimpleError> {
@@ -135,12 +135,18 @@ impl Drop for ContainerManager {
 }
 
 impl ContainerRecord {
-    pub fn new(name: &str, id: &str, pid: &str, command: &str, status: ContainerStatus) -> Self {
+    pub fn new(
+        name: &str,
+        id: &str,
+        pid: i32,
+        command: &Vec<String>,
+        status: ContainerStatus,
+    ) -> Self {
         ContainerRecord {
             id: id.to_string(),
             name: name.to_string(),
-            pid: pid.to_string(),
-            command: command.to_string(),
+            pid: pid,
+            command: command.clone(),
             status,
         }
     }

@@ -61,9 +61,10 @@ pub struct StartArgs {
     /// Name of the container.
     #[arg(required = true)]
     pub name: String,
-    /// Interactive mode.
+
+    /// Detach the container.
     #[arg(short, long)]
-    pub interactive: bool,
+    pub detach: bool,
 }
 
 #[derive(Args, Debug, Serialize, Deserialize, Clone)]

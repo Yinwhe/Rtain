@@ -5,10 +5,36 @@ use tokio::{
     net::UnixStream,
 };
 
-use crate::core::{Msg, RunArgs};
+use crate::core::*;
 
-pub async fn client_run_container(mut stream: UnixStream, args: RunArgs) {
-    if args.detach {
+pub async fn client_run_container(args: RunArgs, stream: UnixStream) {
+    client_do_run(args.detach, stream).await;
+}
+
+pub async fn client_start_container(args: StartArgs, stream: UnixStream) {
+    client_do_run(args.detach, stream).await;
+}
+
+pub async fn client_stop_container(args: StopArgs, mut stream: UnixStream) {}
+
+pub async fn client_list_containers(_args: PSArgs, mut stream: UnixStream) {
+    match Msg::recv_from(&mut stream).await {
+        Ok(msg) => match msg {
+            Msg::OkContent(cont) => println!("{cont}"),
+            Msg::Err(e) => eprintln!("Failed to `ps` containers, due to: {e}"),
+            _ => unreachable!(),
+        },
+        Err(e) => {
+            eprintln!("Failed to recv msg from daemon: {e}");
+        }
+    }
+}
+
+pub async fn client_show_logs(args: LogsArgs, mut stream: UnixStream) {}
+
+#[inline]
+async fn client_do_run(detach: bool, mut stream: UnixStream) {
+    if detach {
         // Detach run, just exit with no more oprations.
     } else {
         let resp = Msg::recv_from(&mut stream).await;

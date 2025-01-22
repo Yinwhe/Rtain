@@ -13,7 +13,7 @@ use crate::core::cmd::ExecArgs;
 use crate::core::RECORD_MANAGER;
 
 /// Enter a container.
-pub fn exec_container(exec_args: ExecArgs) {
+pub async fn exec_container(exec_args: ExecArgs) {
     // Let's first get the container pid.
     let cr = match RECORD_MANAGER.get_record(&exec_args.name) {
         Some(cr) => cr,
@@ -34,7 +34,7 @@ pub fn exec_container(exec_args: ExecArgs) {
         return;
     }
 
-    let pid = cr.pid.parse().unwrap();
+    let pid = cr.pid;
 
     // Clone and exec into the container.
     const STACK_SIZE: usize = 1 * 1024 * 1024;

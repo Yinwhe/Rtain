@@ -3,11 +3,12 @@ use std::io::Write;
 
 use log::error;
 use tabwriter::TabWriter;
+use tokio::net::UnixStream;
 
 use crate::core::cmd::{LogsArgs, PSArgs};
-use crate::core::{RECORD_MANAGER, ROOT_PATH};
+use crate::core::{Msg, RECORD_MANAGER, ROOT_PATH};
 
-pub fn list_containers(_ps_args: PSArgs) {
+pub async fn list_containers(_ps_args: PSArgs, mut stream: UnixStream) {
     let records = RECORD_MANAGER.get_all_records();
 
     let mut tw = TabWriter::new(vec![]);
@@ -17,17 +18,31 @@ pub fn list_containers(_ps_args: PSArgs) {
         let _ = writeln!(
             tw,
             "{}\t{}\t{}\t{}\t{:?}",
-            record.id, record.name, record.pid, record.command, record.status
+            record.id,
+            record.name,
+            record.pid,
+            record.command.join(" "),
+            record.status
         );
     }
 
-    let _ = tw.flush();
+    match tw.into_inner() {
+        Ok(data) => {
+            let _ = Msg::OkContent(String::from_utf8(data).unwrap())
+                .send_to(&mut stream)
+                .await;
+        }
+        Err(e) => {
+            error!("Failed to write to tab writer: {}", e);
 
-    let output = String::from_utf8(tw.into_inner().unwrap()).unwrap();
-    println!("{}", output);
+            let _ = Msg::Err(format!("Failed to write to tab writer: {}", e))
+                .send_to(&mut stream)
+                .await;
+        }
+    }
 }
 
-pub fn show_logs(log_args: LogsArgs) {
+pub async fn show_logs(log_args: LogsArgs, mut stream: UnixStream) {
     let cr = match RECORD_MANAGER.get_record(&log_args.name) {
         Some(cr) => cr,
         None => {
@@ -35,6 +50,11 @@ pub fn show_logs(log_args: LogsArgs) {
                 "Failed to get container {} record, record does not exist",
                 &log_args.name
             );
+
+            let _ = Msg::Err(format!("Failed to get record {}, does not exist", &log_args.name))
+                .send_to(&mut stream)
+                .await;
+
             return;
         }
     };
@@ -46,9 +66,14 @@ pub fn show_logs(log_args: LogsArgs) {
         Ok(logs) => logs,
         Err(e) => {
             error!("Failed to read logs: {}", e);
+
+            let _ = Msg::Err(format!("Failed to read logs: {}", e))
+                .send_to(&mut stream)
+                .await;
+
             return;
         }
     };
 
-    println!("{}", logs);
+    let _ = Msg::OkContent(logs).send_to(&mut stream).await;
 }

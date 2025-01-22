@@ -24,6 +24,7 @@ use tokio::{
 
 use crate::core::{
     cmd::RunArgs,
+    container::stop::do_stop,
     error::SimpleError,
     records::{ContainerRecord, ContainerStatus},
     Msg, RECORD_MANAGER, ROOT_PATH,
@@ -33,18 +34,42 @@ use super::image::{delete_workspace, new_workspace};
 
 /// Run a new container from given image.
 pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
-    let (stream_reader, stream_writer) = stream.into_split();
-    let stream_reader = Arc::new(Mutex::new(stream_reader));
-    let stream_writer = Arc::new(Mutex::new(stream_writer));
-
-    let (pty, pipe, child, root_path) = match run_prepare(&run_args) {
+    let (pty, pipe, cr) = match run_prepare(&run_args) {
         Ok(res) => res,
         Err(e) => {
             error!("Failed to run container: {:?}", e);
+            // FIXME: Error return.
 
             return;
         }
     };
+
+    do_run(
+        &cr.name,
+        &cr.id,
+        Pid::from_raw(cr.pid),
+        pty,
+        pipe,
+        stream,
+        run_args.detach,
+    ).await;
+}
+
+pub async fn do_run(
+    name: &str,
+    id: &str,
+    child: Pid,
+    pty: OpenptyResult,
+    pipe: (OwnedFd, OwnedFd),
+    stream: UnixStream,
+    detach: bool,
+) {
+    let (stream_reader, stream_writer) = stream.into_split();
+    let stream_reader = Arc::new(Mutex::new(stream_reader));
+    let stream_writer = Arc::new(Mutex::new(stream_writer));
+
+    let name_id = format!("{name}-{id}");
+    let root_path = format!("{}/{}", ROOT_PATH, name_id);
 
     let _slave_fd = pty.slave;
     let master_fd = Arc::new(pty.master);
@@ -87,7 +112,7 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
 
     write(&pipe.1, b"CONT").unwrap();
 
-    if !run_args.detach {
+    if !detach {
         debug!("[Daemon]: Attach, redirecting stdio to PTY");
 
         Msg::Continue
@@ -144,10 +169,8 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
 
         tokio::select! {
             _ = client_to_pty => {
-                // Write to PTY finished, client exits.
+                // Write to PTY finished, client exits, and in current impl, we end the container here.
                 pty_to_client.abort();
-                // But the container is still running, so we just detach.
-                // That is, continue to run the detach codes.
             }
             wait_res = check_child_exit => {
                 // Child process exited.
@@ -170,38 +193,37 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
                     Err(e) => unimplemented!("Waitpid error: {:?}", e),
                 };
                 stream_writer.lock().await.shutdown().await.unwrap();
-                return ;
             }
         }
+    } else {
+        debug!("[Daemon]: Detach, redirecting stdio to log file");
+        let pty_to_log = tokio::spawn(async move {
+            let mut buffer = vec![0u8; 1024];
+            let mut pty_reader = container_reader.lock().await;
+            loop {
+                match pty_reader.read(&mut buffer).await {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        log_file.write_all(&buffer[..n]).await.unwrap();
+                    }
+                    Err(_e) => break,
+                }
+            }
+        });
+
+        // Child exits watcher
+        let _ = tokio::join!(tokio::spawn(async move { waitpid(child, None) }));
+
+        read_from_pty.abort();
+        pty_to_log.abort();
     }
 
-    debug!("[Daemon]: Detach, redirecting stdio to log file");
-    let pty_to_log = tokio::spawn(async move {
-        let mut buffer = vec![0u8; 1024];
-        let mut pty_reader = container_reader.lock().await;
-        loop {
-            match pty_reader.read(&mut buffer).await {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    log_file.write_all(&buffer[..n]).await.unwrap();
-                }
-                Err(_e) => break,
-            }
-        }
-    });
-
-    // Child exits watcher
-    let check_child_exit = tokio::spawn(async move { waitpid(child, None) });
-
-    let _ = tokio::join!(check_child_exit);
-
-    read_from_pty.abort();
-    pty_to_log.abort();
+    do_stop(name, id);
 }
 
 fn run_prepare(
     run_args: &RunArgs,
-) -> Result<(OpenptyResult, (OwnedFd, OwnedFd), Pid, String), SimpleError> {
+) -> Result<(OpenptyResult, (OwnedFd, OwnedFd), ContainerRecord), SimpleError> {
     // Generate name-id.
     let id = random_id();
     let name = run_args.name.clone().unwrap_or_else(|| id.clone());
@@ -261,13 +283,13 @@ fn run_prepare(
     let cr = ContainerRecord::new(
         &name,
         &id,
-        &child.to_string(),
-        &run_args.command.join(" "),
+        child.as_raw(),
+        &run_args.command,
         ContainerStatus::Running,
     );
-    RECORD_MANAGER.register(cr);
+    RECORD_MANAGER.register(cr.clone());
 
-    Ok((pty, pipe, child, root_path))
+    Ok((pty, pipe, cr))
 }
 
 /// This is the first process in the new namespace.
