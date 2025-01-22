@@ -1,15 +1,21 @@
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
+use super::CLI;
+
 #[derive(Serialize, Deserialize, Debug)]
-pub enum Response {
+pub enum Msg {
+    /// Client Request
+    Req(CLI),
+
+    /// Server Response
     Ok,
     OkContent(String),
     Continue,
     Err(String),
 }
 
-impl Response {
+impl Msg {
     pub async fn send_to(
         self,
         stream: &mut (impl AsyncWriteExt + std::marker::Unpin),
@@ -28,6 +34,20 @@ impl Response {
 
         serde_json::from_str(&buf)
             .map_err(|e| tokio::io::Error::new(tokio::io::ErrorKind::InvalidData, e))
+    }
+
+    pub fn get_req(self) -> Option<CLI> {
+        match self {
+            Msg::Req(cli) => Some(cli),
+            _ => None,
+        }
+    }
+
+    pub fn get_okcont(self) -> Option<String> {
+        match self {
+            Msg::OkContent(cont) => Some(cont),
+            _ => None,
+        }
     }
 
     #[inline]

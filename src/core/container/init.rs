@@ -26,8 +26,7 @@ use crate::core::{
     cmd::RunArgs,
     error::SimpleError,
     records::{ContainerRecord, ContainerStatus},
-    response::Response,
-    RECORD_MANAGER, ROOT_PATH,
+    Msg, RECORD_MANAGER, ROOT_PATH,
 };
 
 use super::image::{delete_workspace, new_workspace};
@@ -91,7 +90,7 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
     if !run_args.detach {
         debug!("[Daemon]: Attach, redirecting stdio to PTY");
 
-        Response::Continue
+        Msg::Continue
             .send_to(&mut *stream_writer.lock().await)
             .await
             .unwrap();
@@ -107,8 +106,6 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
                 match pty_reader.read(&mut buffer).await {
                     Ok(0) => break, // EOF
                     Ok(n) => {
-                        // debug!("Read from pty, send: {}", String::from_utf8_lossy(&buffer[..n]));
-
                         if let Err(e) = client_writer.write_all(&buffer[..n]).await {
                             error!("Error writing to client: {}", e);
                             break;
@@ -129,8 +126,6 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
                 match client_reader.read(&mut buffer).await {
                     Ok(0) => break, // EOF
                     Ok(n) => {
-                        // debug!("Write to pty: {}", String::from_utf8_lossy(&buffer));
-
                         if let Err(e) = write(&master_writer, &buffer[..n]) {
                             error!("Error writing to client: {}", e);
                             break;
@@ -160,32 +155,27 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
 
                 // The container exit, inform the client.
                 pty_to_client.abort();
-                let resp = match wait_res.unwrap() {
+                match wait_res.unwrap() {
                     Ok(status) => {
                         match status {
                             WaitStatus::Exited(_, code) => {
-                                Response::OkContent(format!(
-                                    "Container exited with code: {}",
-                                    code
-                                ))
+                                let msg = format!( "Container exited with code: {code}");
+                                stream_writer.lock().await.write_all(msg.as_bytes()).await.unwrap();
+
+                                info!("{}", msg);
                             }
                             _ => unimplemented!("Other wait status are not implemented currently"),
                         }
                     }
-                    Err(e) => {
-                        error!("Error waiting for child: {:?}", e);
-                        Response::Err(format!("Error waiting for child: {:?}", e))
-                    }
+                    Err(e) => unimplemented!("Waitpid error: {:?}", e),
                 };
-                resp.send_to(&mut *stream_writer.lock().await).await.unwrap();
-
+                stream_writer.lock().await.shutdown().await.unwrap();
                 return ;
             }
         }
     }
 
     debug!("[Daemon]: Detach, redirecting stdio to log file");
-    // TODO: Implement log file redirection.
     let pty_to_log = tokio::spawn(async move {
         let mut buffer = vec![0u8; 1024];
         let mut pty_reader = container_reader.lock().await;

@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
-#[derive(Parser, Debug, Serialize, Deserialize)]
+#[derive(Parser, Debug, Serialize, Deserialize, Clone)]
 #[command(name = "rtain")]
 #[command(about = "rtain is a simple container runtime implemented in Rust.")]
 pub struct CLI {
@@ -9,7 +9,7 @@ pub struct CLI {
     pub command: Commands,
 }
 
-#[derive(Subcommand, Debug, Serialize, Deserialize)]
+#[derive(Subcommand, Debug, Serialize, Deserialize, Clone)]
 pub enum Commands {
     /// Running a container from images.
     Run(RunArgs),
@@ -29,7 +29,7 @@ pub enum Commands {
     Commit(CommitArgs),
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct RunArgs {
     /// Name of the container.
     #[arg(short, long)]
@@ -56,7 +56,7 @@ pub struct RunArgs {
     pub command: Vec<String>,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct StartArgs {
     /// Name of the container.
     #[arg(required = true)]
@@ -66,7 +66,7 @@ pub struct StartArgs {
     pub interactive: bool,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct ExecArgs {
     /// Name of the container.
     #[arg(short, long)]
@@ -77,28 +77,28 @@ pub struct ExecArgs {
     pub command: Vec<String>,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct StopArgs {
     pub name: String,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct RMArgs {
     pub name: String,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct PSArgs {
     #[arg(short, long)]
     pub all: bool,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct LogsArgs {
     pub name: String,
 }
 
-#[derive(Args, Debug, Serialize, Deserialize)]
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
 pub struct CommitArgs {
     /// Name of the container to commit.
     pub name: String,

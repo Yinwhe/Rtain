@@ -3,7 +3,6 @@ use std::env;
 use lazy_static::lazy_static;
 use log::{debug, info};
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
     net::{UnixListener, UnixStream},
     task,
 };
@@ -11,17 +10,17 @@ use tokio::{
 mod cmd;
 mod container;
 mod error;
+mod msg;
 mod records;
-mod response;
 
 use container::*;
 use records::ContainerManager;
 
 pub use cmd::*;
-pub use response::*;
+pub use msg::*;
 
 pub const ROOT_PATH: &str = "/tmp/rtain";
-pub const SOCKET_PATH: &str = "/tmp/rtain_demons.sock";
+pub const SOCKET_PATH: &str = "/tmp/rtain_daemons.sock";
 
 lazy_static! {
     static ref RECORD_MANAGER: ContainerManager = ContainerManager::init(ROOT_PATH)
@@ -56,18 +55,10 @@ async fn run_daemon() -> tokio::io::Result<()> {
 }
 
 async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
-    let mut message = String::new();
+    let msg = Msg::recv_from(&mut stream).await.unwrap();
+    debug!("Received msg: {:?}", msg);
 
-    let mut bufreader = BufReader::new(&mut stream);
-    let size = bufreader.read_line(&mut message).await?;
-    if size == 0 {
-        info!("[Daemon]: No data received, is client dead?");
-        return Ok(());
-    }
-
-    let cli = serde_json::from_str::<CLI>(&message)?;
-
-    debug!("Received command: {:?}", cli);
+    let cli = msg.get_req().unwrap();
 
     match cli.command {
         Commands::Run(run_args) => run_container(run_args, stream).await,

@@ -5,15 +5,15 @@ use tokio::{
     net::UnixStream,
 };
 
-use crate::core::{Response, RunArgs};
+use crate::core::{Msg, RunArgs};
 
 pub async fn client_run_container(mut stream: UnixStream, args: RunArgs) {
     if args.detach {
         // Detach run, just exit with no more oprations.
     } else {
-        let resp = Response::recv_from(&mut stream).await;
+        let resp = Msg::recv_from(&mut stream).await;
         match resp {
-            Ok(Response::Continue) => {} // Ok continue the process.
+            Ok(Msg::Continue) => {} // Ok continue the process.
             _ => {
                 eprintln!("Unexpected response from daemon: {:?}", resp);
                 return;
@@ -52,6 +52,8 @@ pub async fn client_run_container(mut stream: UnixStream, args: RunArgs) {
             Ok::<(), tokio::io::Error>(())
         });
 
-        let _ = tokio::join!(write_to_daemon, read_from_daemon);
+        // let _ = tokio::join!(write_to_daemon, read_from_daemon);
+        let _ = tokio::join!(read_from_daemon);
+        write_to_daemon.abort();
     }
 }
