@@ -1,6 +1,5 @@
 use std::env;
 
-use lazy_static::lazy_static;
 use log::{debug, error, info};
 use tokio::{
     net::{UnixListener, UnixStream},
@@ -8,12 +7,11 @@ use tokio::{
 };
 
 mod cmd;
-// mod container;
-mod error;
+mod container;
 mod metas;
 mod msg;
 
-// use container::*;
+use container::*;
 
 pub use cmd::*;
 pub use msg::*;
@@ -56,18 +54,18 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
         }
     };
 
-    // let cli = msg.get_req().unwrap();
-    // match cli.command {
-    //     Commands::Run(run_args) => run_container(run_args, stream).await,
-    //     Commands::Start(start_args) => start_container(start_args, stream).await,
-    //     // Commands::Exec(exec_args) => exec_container(exec_args),
-    //     Commands::Stop(stop_args) => stop_container(stop_args, stream).await,
-    //     // Commands::RM(rm_args) => remove_container(rm_args),
-    //     Commands::PS(ps_args) => list_containers(ps_args, stream).await,
-    //     Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
-    //     // Commands::Commit(commit_args) => container::commit_container(commit_args),
-    //     _ => unimplemented!(),
-    // };
+    let cli = msg.get_req().unwrap();
+    match cli.command {
+        Commands::Run(run_args) => run_container(run_args, stream).await,
+        Commands::Start(start_args) => start_container(start_args, stream).await,
+        // Commands::Exec(exec_args) => exec_container(exec_args),
+        Commands::Stop(stop_args) => stop_container(stop_args, stream).await,
+        // Commands::RM(rm_args) => remove_container(rm_args),
+        Commands::PS(ps_args) => list_containers(ps_args, stream).await,
+        Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
+        // Commands::Commit(commit_args) => container::commit_container(commit_args),
+        _ => unimplemented!(),
+    };
 
     debug!("[Daemon]: Task done, daemon disconnected");
     Ok(())

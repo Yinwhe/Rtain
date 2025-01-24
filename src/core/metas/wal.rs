@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use tokio::io::AsyncWriteExt;
 
-use super::storage::{current_time, StorageOperation};
+use super::{current_time, storage::StorageOperation};
 
 #[derive(Debug)]
 /// Write-ahead loggings.

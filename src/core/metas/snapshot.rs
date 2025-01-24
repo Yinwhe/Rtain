@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::{meta::InnerState, storage::current_time};
+use super::{current_time, meta::InnerState};
 
 #[derive(Debug)]
 pub struct Snapshotter {

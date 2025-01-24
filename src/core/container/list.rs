@@ -6,23 +6,24 @@ use tabwriter::TabWriter;
 use tokio::net::UnixStream;
 
 use crate::core::cmd::{LogsArgs, PSArgs};
-use crate::core::{Msg, RECORD_MANAGER, ROOT_PATH};
+use crate::core::metas::CONTAINER_METAS;
+use crate::core::{Msg, ROOT_PATH};
 
 pub async fn list_containers(_ps_args: PSArgs, mut stream: UnixStream) {
-    let records = RECORD_MANAGER.get_all_records();
+    let metas = CONTAINER_METAS.get_all_metas().await;
 
     let mut tw = TabWriter::new(vec![]);
     let _ = tw.write_all(b"ID\tNAME\tPID\tCOMMAND\tSTATUS\n");
 
-    for record in records {
+    for meta in metas {
         let _ = writeln!(
             tw,
             "{}\t{}\t{}\t{}\t{:?}",
-            record.id,
-            record.name,
-            record.pid,
-            record.command.join(" "),
-            record.status
+            meta.id,
+            meta.name,
+            meta.get_pid().unwrap_or(-1),
+            meta.command.join(" "),
+            meta.status
         );
     }
 
@@ -43,23 +44,26 @@ pub async fn list_containers(_ps_args: PSArgs, mut stream: UnixStream) {
 }
 
 pub async fn show_logs(log_args: LogsArgs, mut stream: UnixStream) {
-    let cr = match RECORD_MANAGER.get_record(&log_args.name) {
-        Some(cr) => cr,
+    let meta = match CONTAINER_METAS.get_meta_by_name(&log_args.name).await {
+        Some(meta) => meta,
         None => {
             error!(
-                "Failed to get container {} record, record does not exist",
+                "Failed to get container {} meta, does not exist",
                 &log_args.name
             );
 
-            let _ = Msg::Err(format!("Failed to get record {}, does not exist", &log_args.name))
-                .send_to(&mut stream)
-                .await;
+            let _ = Msg::Err(format!(
+                "Failed to get container {} meta, does not exist",
+                &log_args.name
+            ))
+            .send_to(&mut stream)
+            .await;
 
             return;
         }
     };
 
-    let name_id = format!("{}-{}", cr.name, cr.id);
+    let name_id = format!("{}-{}", meta.name, meta.id);
 
     let path = format!("{}/{}/stdout.log", ROOT_PATH, name_id);
     let logs = match read_to_string(path) {

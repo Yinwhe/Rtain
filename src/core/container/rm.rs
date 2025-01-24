@@ -3,11 +3,12 @@ use log::{debug, error};
 
 use super::image::delete_workspace;
 use crate::core::cmd::RMArgs;
-use crate::core::{RECORD_MANAGER, ROOT_PATH};
+use crate::core::metas::CONTAINER_METAS;
+use crate::core::ROOT_PATH;
 
-pub fn remove_container(rm_args: RMArgs) {
-    let cr = match RECORD_MANAGER.get_record(&rm_args.name) {
-        Some(cr) => cr,
+pub async fn remove_container(rm_args: RMArgs) {
+    let meta = match CONTAINER_METAS.get_meta_by_name(&rm_args.name).await {
+        Some(meta) => meta,
         None => {
             error!(
                 "Failed to rm container {}, record does not exist",
@@ -17,7 +18,7 @@ pub fn remove_container(rm_args: RMArgs) {
         }
     };
 
-    if cr.status.is_running() {
+    if meta.status.is_running() {
         error!(
             "Failed to rm container {}, it's still running",
             &rm_args.name
@@ -26,7 +27,7 @@ pub fn remove_container(rm_args: RMArgs) {
     }
 
     // Do some clean up.
-    let name_id = format!("{}-{}", cr.name, cr.id);
+    let name_id = format!("{}-{}", meta.name, meta.id);
     let root_path = format!("{}/{}", ROOT_PATH, name_id);
     let mnt_path = format!("{}/{}/mnt", ROOT_PATH, name_id);
 
@@ -43,13 +44,18 @@ pub fn remove_container(rm_args: RMArgs) {
 
     // TODO: volume support needed.
     debug!("Delete workspace: {:?}", &root_path);
-    if let Err(e) = delete_workspace(&root_path, &mnt_path, &None) {
+    if let Err(e) = delete_workspace(&root_path, &mnt_path, &None).await {
         error!(
             "Failed to rm container {}, cannot clean up workspace: {}",
             &rm_args.name, e
         );
     }
 
-    debug!("Deregister container: {:?}", &cr.name);
-    RECORD_MANAGER.deregister(&cr.id);    
+    debug!("Deregister container: {:?}", &meta.name);
+    if let Err(e) = CONTAINER_METAS.deregister(meta.id).await {
+        error!(
+            "Failed to rm container {}, cannot deregister container: {}",
+            &rm_args.name, e
+        );
+    }
 }

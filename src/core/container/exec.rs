@@ -9,14 +9,13 @@ use nix::{
     unistd::execvp,
 };
 
-use crate::core::cmd::ExecArgs;
-use crate::core::RECORD_MANAGER;
+use crate::core::{cmd::ExecArgs, metas::CONTAINER_METAS};
 
 /// Enter a container.
 pub async fn exec_container(exec_args: ExecArgs) {
     // Let's first get the container pid.
-    let cr = match RECORD_MANAGER.get_record(&exec_args.name) {
-        Some(cr) => cr,
+    let meta = match CONTAINER_METAS.get_meta_by_name(&exec_args.name).await {
+        Some(meta) => meta,
         None => {
             error!(
                 "Failed to exec container {}, record does not exist",
@@ -26,7 +25,7 @@ pub async fn exec_container(exec_args: ExecArgs) {
         }
     };
 
-    if !cr.status.is_running() {
+    if !meta.status.is_running() {
         error!(
             "Failed to exec container {}, it's not running",
             exec_args.name
@@ -34,8 +33,7 @@ pub async fn exec_container(exec_args: ExecArgs) {
         return;
     }
 
-    let pid = cr.pid;
-
+    let pid = meta.get_pid().unwrap();
     // Clone and exec into the container.
     const STACK_SIZE: usize = 1 * 1024 * 1024;
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];

@@ -3,11 +3,12 @@ use std::{path::Path, process::Command};
 use log::{debug, error};
 
 use crate::core::cmd::CommitArgs;
-use crate::core::{RECORD_MANAGER, ROOT_PATH};
+use crate::core::metas::CONTAINER_METAS;
+use crate::core::ROOT_PATH;
 
-pub fn commit_container(cm_args: CommitArgs) {
-    let cr = match RECORD_MANAGER.get_record(&cm_args.name) {
-        Some(cr) => cr,
+pub async fn commit_container(cm_args: CommitArgs) {
+    let meta = match CONTAINER_METAS.get_meta_by_name(&cm_args.name).await {
+        Some(meta) => meta,
         None => {
             error!(
                 "Failed to commit container {}, record does not exist",
@@ -17,7 +18,7 @@ pub fn commit_container(cm_args: CommitArgs) {
         }
     };
 
-    let name_id = format!("{}-{}", cr.name, cr.id);
+    let name_id = format!("{}-{}", meta.name, meta.id);
 
     let mnt_path = Path::new(ROOT_PATH).join(name_id).join("mnt");
     let image_path = Path::new(&cm_args.image).join(format!("{}.tar", cm_args.image));

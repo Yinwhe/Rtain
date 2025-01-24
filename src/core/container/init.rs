@@ -1,9 +1,4 @@
-use std::{
-    ffi::CString,
-    os::fd::{AsRawFd, OwnedFd},
-    path::Path,
-    sync::Arc,
-};
+use std::{ffi::CString, os::fd::AsRawFd, path::Path, sync::Arc};
 
 use cgroups_rs::{cgroup_builder::CgroupBuilder, Cgroup, CgroupPid};
 use log::{debug, error, info};
@@ -13,28 +8,28 @@ use nix::{
     pty::{openpty, OpenptyResult},
     sched::{clone, CloneFlags},
     sys::wait::{waitpid, WaitStatus},
-    unistd::{chdir, dup2, execvp, pipe, pivot_root, read, write, Pid},
+    unistd::{chdir, dup2, execvp, pivot_root, read, write, Pid},
 };
 use rand::{thread_rng, Rng};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::UnixStream,
+    net::{unix::pipe, UnixStream},
     sync::Mutex,
 };
 
 use crate::core::{
     cmd::RunArgs,
     container::stop::do_stop,
-    error::SimpleError,
-    records::{ContainerRecord, ContainerStatus},
-    Msg, RECORD_MANAGER, ROOT_PATH,
+    metas::{ContainerMeta, CONTAINER_METAS},
+    Msg, ROOT_PATH,
 };
 
 use super::image::{delete_workspace, new_workspace};
 
 /// Run a new container from given image.
 pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
-    let (pty, pipe, cr) = match run_prepare(&run_args) {
+    let detach = run_args.detach;
+    let (pty, pipe, meta) = match run_prepare(run_args).await {
         Ok(res) => res,
         Err(e) => {
             error!("Failed to run container: {:?}", e);
@@ -44,23 +39,16 @@ pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
         }
     };
 
-    do_run(
-        &cr.name,
-        &cr.id,
-        Pid::from_raw(cr.pid),
-        pty,
-        pipe,
-        stream,
-        run_args.detach,
-    ).await;
+    let pid = Pid::from_raw(meta.get_pid().unwrap());
+    do_run(meta.name, meta.id, pid, pty, pipe, stream, detach).await;
 }
 
 pub async fn do_run(
-    name: &str,
-    id: &str,
+    name: String,
+    id: String,
     child: Pid,
     pty: OpenptyResult,
-    pipe: (OwnedFd, OwnedFd),
+    pipe: (pipe::Sender, pipe::Receiver),
     stream: UnixStream,
     detach: bool,
 ) {
@@ -83,7 +71,7 @@ pub async fn do_run(
         Ok(f) => f,
         Err(e) => {
             error!("Failed to open log file: {:?}", e);
-            write(&pipe.1, b"EXIT").unwrap();
+            write(&pipe.0, b"EXIT").unwrap();
 
             return;
         }
@@ -110,7 +98,7 @@ pub async fn do_run(
         }
     });
 
-    write(&pipe.1, b"CONT").unwrap();
+    write(&pipe.0, b"CONT").unwrap();
 
     if !detach {
         debug!("[Daemon]: Attach, redirecting stdio to PTY");
@@ -221,12 +209,12 @@ pub async fn do_run(
     do_stop(name, id);
 }
 
-fn run_prepare(
-    run_args: &RunArgs,
-) -> Result<(OpenptyResult, (OwnedFd, OwnedFd), ContainerRecord), SimpleError> {
+async fn run_prepare(
+    run_args: RunArgs,
+) -> anyhow::Result<(OpenptyResult, (pipe::Sender, pipe::Receiver), ContainerMeta)> {
     // Generate name-id.
     let id = random_id();
-    let name = run_args.name.clone().unwrap_or_else(|| id.clone());
+    let name = run_args.name.unwrap_or_else(|| id.clone());
     let name_id = format!("{}-{}", name, id);
 
     // Root is where we store needed info and the image for the container.
@@ -238,13 +226,13 @@ fn run_prepare(
     let pty = openpty(None, None)?;
 
     // Sync between daemon and new child process (container).
-    let pipe_p = pipe()?;
-    let pipe_c = pipe()?;
+    let pipe_p = pipe::pipe()?;
+    let pipe_c = pipe::pipe()?;
     let pipe = (pipe_p.0, pipe_c.1);
     let mut buf = [0u8; 4];
 
     // Here we create the whole workspace.
-    new_workspace(&run_args.image, &root_path, &mnt_path, &run_args.volume)?;
+    new_workspace(&run_args.image, &root_path, &mnt_path, &run_args.volume).await?;
 
     // Create a new process with new namespaces.
     let child =
@@ -252,48 +240,49 @@ fn run_prepare(
             Ok(child) => child,
             Err(e) => {
                 // Clone child failure, clean up.
-                delete_workspace(&root_path, &mnt_path, &run_args.volume)?;
+                let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
                 return Err(e);
             }
         };
 
     // Wait for child ready.
-    read(pipe.0.as_raw_fd(), &mut buf).unwrap();
+    read(pipe.1.as_raw_fd(), &mut buf).unwrap();
     if buf == *b"EXIT" {
         // Child failed to initialize, clean up.
-        delete_workspace(&root_path, &mnt_path, &run_args.volume)?;
+        delete_workspace(&root_path, &mnt_path, &run_args.volume).await?;
 
-        return Err("Failed to initialize container".into());
+        return Err(anyhow::anyhow!(
+            "Failed to initialize container: child unexpected exit"
+        ));
     }
 
     // Setting up cgroups
-    match setup_cgroup(&name_id, child) {
+    let cg = match setup_cgroup(&name_id, child) {
         Ok(cg) => cg,
         Err(e) => {
-            write(&pipe.1, b"EXIT").unwrap();
+            write(&pipe.0, b"EXIT").unwrap();
+            let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
 
-            // CGroup error, clean up.
-            delete_workspace(&root_path, &mnt_path, &run_args.volume)?;
-
-            return Err(e);
+            return Err(anyhow::anyhow!("Failed to setup cgroup: {:?}", e));
         }
     };
 
     // Form the container record.
-    let cr = ContainerRecord::new(
-        &name,
-        &id,
-        child.as_raw(),
-        &run_args.command,
-        ContainerStatus::Running,
-    );
-    RECORD_MANAGER.register(cr.clone());
+    let cm = ContainerMeta::new(name, id, child.as_raw(), run_args.command);
 
-    Ok((pty, pipe, cr))
+    if let Err(e) = CONTAINER_METAS.register(cm.clone()).await {
+        write(&pipe.0, b"EXIT").unwrap();
+        let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
+        let _ = cg.delete();
+
+        return Err(anyhow::anyhow!("Failed to register container: {:?}", e));
+    }
+
+    Ok((pty, pipe, cm))
 }
 
 /// This is the first process in the new namespace.
-fn do_init(command: &Vec<String>) -> Result<(), SimpleError> {
+fn do_init(command: &Vec<String>) -> anyhow::Result<()> {
     let command_cstr = CString::new(command[0].clone())?;
     let args_cstr: Vec<CString> = command
         .iter()
@@ -307,12 +296,14 @@ fn do_init(command: &Vec<String>) -> Result<(), SimpleError> {
 }
 
 /// Create a new process with new namespaces and return its pid.
-fn new_container_process(
+pub fn new_container_process(
     mnt_path: &str,
-    pipe: (&OwnedFd, &OwnedFd),
+    pipe: (&pipe::Sender, &pipe::Receiver),
     pty: &OpenptyResult,
     command: &Vec<String>,
-) -> Result<Pid, SimpleError> {
+) -> anyhow::Result<Pid> {
+    // NOTICE: In current impl, we always create new namespaces for the container, rather than
+    // keep alive the old ones.
     let flags = CloneFlags::CLONE_NEWUTS
         | CloneFlags::CLONE_NEWPID
         | CloneFlags::CLONE_NEWNS
@@ -322,7 +313,7 @@ fn new_container_process(
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];
 
     let child_func = || {
-        let setup_stdio = || -> Result<(), SimpleError> {
+        let setup_stdio = || -> anyhow::Result<()> {
             let _master_fd = pty.master.try_clone()?;
             let slave_fd = pty.slave.try_clone()?;
 
@@ -335,7 +326,7 @@ fn new_container_process(
         };
 
         if let Err(e) = setup_stdio() {
-            write(pipe.1, b"EXIT").unwrap();
+            write(pipe.0, b"EXIT").unwrap();
 
             error!("Container initializer failure: {:?}", e);
             return -1;
@@ -343,18 +334,18 @@ fn new_container_process(
 
         // Switch root here.
         if let Err(e) = setup_mount(mnt_path) {
-            write(pipe.1, b"EXIT").unwrap();
+            write(pipe.0, b"EXIT").unwrap();
 
             error!("Container initializer failure: {:?}", e);
             return -1;
         }
 
         // Inform the parents ready.
-        write(pipe.1, b"WAIT").unwrap();
+        write(pipe.0, b"WAIT").unwrap();
 
         // Wait for parent ready.
         let mut buf = [0u8; 4];
-        read(pipe.0.as_raw_fd(), &mut buf).unwrap();
+        read(pipe.1.as_raw_fd(), &mut buf).unwrap();
 
         match &buf {
             b"EXIT" => {
@@ -379,23 +370,22 @@ fn new_container_process(
     Ok(child_pid)
 }
 
-fn setup_cgroup(cg_name: &str, child: Pid) -> Result<Cgroup, SimpleError> {
+fn setup_cgroup(cg_name: &str, child: Pid) -> anyhow::Result<Cgroup> {
     let hier = cgroups_rs::hierarchies::auto();
     let cg = match CgroupBuilder::new(&cg_name).build(hier) {
         Ok(cg) => cg,
-        Err(e) => return Err(Box::new(e)),
+        Err(e) => return Err(anyhow::anyhow!("Failed to create cgroup: {:?}", e)),
     };
 
-    match cg.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
-        Ok(_) => Ok(cg),
-        Err(e) => {
-            cg.delete()?;
-            Err(Box::new(e))
-        }
+    if let Err(e) = cg.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
+        cg.delete()?;
+        return Err(anyhow::anyhow!("Failed to add task to cgroup: {:?}", e));
     }
+
+    Ok(cg)
 }
 
-fn setup_mount(mnt_path: &str) -> Result<(), SimpleError> {
+fn setup_mount(mnt_path: &str) -> anyhow::Result<()> {
     // Make the mount namespace private
     mount(
         None::<&str>,
@@ -424,9 +414,7 @@ fn setup_mount(mnt_path: &str) -> Result<(), SimpleError> {
     Ok(())
 }
 
-fn switch_root(root: &str) -> Result<(), SimpleError> {
-    debug!("Switch root to: {}", root);
-
+fn switch_root(root: &str) -> anyhow::Result<()> {
     // Mount new root to cover the old root
     mount(
         Some(root),

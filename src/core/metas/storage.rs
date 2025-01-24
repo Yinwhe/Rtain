@@ -1,12 +1,7 @@
-use std::{
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::AsyncReadExt,
     sync::{mpsc, oneshot, Mutex},
     task::JoinHandle,
 };
@@ -14,7 +9,7 @@ use tokio::{
 use super::{
     meta::{ContainerMeta, ContainerStatus, InnerState},
     snapshot::Snapshotter,
-    wal::{self, WalManager},
+    wal::WalManager,
 };
 
 #[derive(Clone, Debug)]
@@ -182,11 +177,39 @@ impl StorageManager {
     }
 }
 
-pub fn current_time() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+impl StorageManager {
+    pub async fn get_meta_by_id(&self, id: &str) -> Option<ContainerMeta> {
+        self.inner
+            .lock()
+            .await
+            .state
+            .by_id
+            .get(id)
+            .map(|meta| meta.clone())
+    }
+
+    pub async fn get_meta_by_name(&self, name: &str) -> Option<ContainerMeta> {
+        let locked_inner = self.inner.lock().await;
+        locked_inner.state.by_name.get(name).map(|id| {
+            locked_inner
+                .state
+                .by_id
+                .get(id.as_str())
+                .map(|meta| meta.clone())
+                .unwrap()
+        })
+    }
+
+    pub async fn get_all_metas(&self) -> Vec<ContainerMeta> {
+        self.inner
+            .lock()
+            .await
+            .state
+            .by_id
+            .iter()
+            .map(|meta| meta.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -249,8 +272,7 @@ mod tests {
         let op = StorageOperation::UpdateStatus {
             id: "container1".to_string(),
             status: ContainerStatus::Stopped {
-                exit_code: 0,
-                exited_at: 1625238390,
+                stopped_at: 1625238390,
             },
         };
 
@@ -273,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inner_state_apply_create_operation() {
-        let mut state = InnerState::default();
+        let state = InnerState::default();
 
         let meta = ContainerMeta {
             id: "container1".to_string(),
@@ -304,7 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inner_state_apply_update_status() {
-        let mut state = InnerState::default();
+        let state = InnerState::default();
 
         let meta = ContainerMeta {
             id: "container1".to_string(),
@@ -321,8 +343,7 @@ mod tests {
         state.apply_operation(op).unwrap();
 
         let new_status = ContainerStatus::Stopped {
-            exit_code: 0,
-            exited_at: 1625238390,
+            stopped_at: 1625238390,
         };
         let update_op = StorageOperation::UpdateStatus {
             id: meta.id.clone(),
@@ -342,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inner_state_apply_delete_operation() {
-        let mut state = InnerState::default();
+        let state = InnerState::default();
 
         let meta = ContainerMeta {
             id: "container1".to_string(),
