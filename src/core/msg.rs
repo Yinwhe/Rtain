@@ -21,7 +21,7 @@ impl Msg {
         stream: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> tokio::io::Result<()> {
         let msg = self.prepare();
-        stream.write_all(msg.as_bytes()).await
+        stream.write_all(&msg).await
     }
 
     pub async fn recv_from(
@@ -32,7 +32,7 @@ impl Msg {
 
         bufreader.read_line(&mut buf).await?;
 
-        serde_json::from_str(&buf)
+        bincode::deserialize(buf.as_bytes())
             .map_err(|e| tokio::io::Error::new(tokio::io::ErrorKind::InvalidData, e))
     }
 
@@ -51,9 +51,9 @@ impl Msg {
     }
 
     #[inline]
-    fn prepare(self) -> String {
-        let mut msg = serde_json::to_string(&self).unwrap();
-        msg.push('\n');
+    fn prepare(self) -> Vec<u8> {
+        let mut msg = bincode::serialize(&self).unwrap();
+        msg.push(b'\n');
 
         msg
     }

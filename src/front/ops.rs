@@ -15,13 +15,11 @@ pub async fn client_start_container(args: StartArgs, stream: UnixStream) {
     client_do_run(args.detach, stream).await;
 }
 
-pub async fn client_stop_container(args: StopArgs, mut stream: UnixStream) {}
-
-pub async fn client_list_containers(_args: PSArgs, mut stream: UnixStream) {
+pub async fn client_stop_container(args: StopArgs, mut stream: UnixStream) {
     match Msg::recv_from(&mut stream).await {
         Ok(msg) => match msg {
             Msg::OkContent(cont) => println!("{cont}"),
-            Msg::Err(e) => eprintln!("Failed to `ps` containers, due to: {e}"),
+            Msg::Err(e) => eprintln!("Failed to stop container {}, due to: {e}", args.name),
             _ => unreachable!(),
         },
         Err(e) => {
@@ -30,7 +28,34 @@ pub async fn client_list_containers(_args: PSArgs, mut stream: UnixStream) {
     }
 }
 
-pub async fn client_show_logs(args: LogsArgs, mut stream: UnixStream) {}
+pub async fn client_list_containers(_args: PSArgs, mut stream: UnixStream) {
+    match Msg::recv_from(&mut stream).await {
+        Ok(msg) => match msg {
+            Msg::OkContent(cont) => println!("{cont}"),
+            Msg::Err(e) => eprintln!("Failed to list containers, due to: {e}"),
+            _ => unreachable!(),
+        },
+        Err(e) => {
+            eprintln!("Failed to recv msg from daemon: {e}");
+        }
+    }
+}
+
+pub async fn client_show_logs(args: LogsArgs, mut stream: UnixStream) {
+    match Msg::recv_from(&mut stream).await {
+        Ok(msg) => match msg {
+            Msg::OkContent(cont) => println!("{cont}"),
+            Msg::Err(e) => eprintln!(
+                "Failed to show log for container {}, due to: {e}",
+                args.name
+            ),
+            _ => unreachable!(),
+        },
+        Err(e) => {
+            eprintln!("Failed to recv msg from daemon: {e}");
+        }
+    }
+}
 
 #[inline]
 async fn client_do_run(detach: bool, mut stream: UnixStream) {

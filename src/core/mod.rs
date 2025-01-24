@@ -8,24 +8,18 @@ use tokio::{
 };
 
 mod cmd;
-mod container;
+// mod container;
 mod error;
+mod metas;
 mod msg;
-mod records;
 
-use container::*;
-use records::ContainerManager;
+// use container::*;
 
 pub use cmd::*;
 pub use msg::*;
 
 pub const ROOT_PATH: &str = "/tmp/rtain";
 pub const SOCKET_PATH: &str = "/tmp/rtain_daemons.sock";
-
-lazy_static! {
-    static ref RECORD_MANAGER: ContainerManager = ContainerManager::init(ROOT_PATH)
-        .expect("Fatal, failed to initialize the container manager");
-}
 
 async fn run_daemon() -> tokio::io::Result<()> {
     env::set_var("RUST_LOG", "debug");
@@ -62,21 +56,18 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
         }
     };
 
-    debug!("Received msg: {:?}", msg);
-
-    let cli = msg.get_req().unwrap();
-
-    match cli.command {
-        Commands::Run(run_args) => run_container(run_args, stream).await,
-        Commands::Start(start_args) => start_container(start_args, stream).await,
-        // Commands::Exec(exec_args) => exec_container(exec_args),
-        Commands::Stop(stop_args) => stop_container(stop_args).await,
-        // Commands::RM(rm_args) => remove_container(rm_args),
-        Commands::PS(ps_args) => list_containers(ps_args, stream).await,
-        Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
-        // Commands::Commit(commit_args) => container::commit_container(commit_args),
-        _ => unimplemented!(),
-    };
+    // let cli = msg.get_req().unwrap();
+    // match cli.command {
+    //     Commands::Run(run_args) => run_container(run_args, stream).await,
+    //     Commands::Start(start_args) => start_container(start_args, stream).await,
+    //     // Commands::Exec(exec_args) => exec_container(exec_args),
+    //     Commands::Stop(stop_args) => stop_container(stop_args, stream).await,
+    //     // Commands::RM(rm_args) => remove_container(rm_args),
+    //     Commands::PS(ps_args) => list_containers(ps_args, stream).await,
+    //     Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
+    //     // Commands::Commit(commit_args) => container::commit_container(commit_args),
+    //     _ => unimplemented!(),
+    // };
 
     debug!("[Daemon]: Task done, daemon disconnected");
     Ok(())

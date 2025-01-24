@@ -15,11 +15,14 @@ use nix::{
 use tokio::net::UnixStream;
 
 use super::init::do_run;
-use crate::core::records::{ContainerRecord, ContainerStatus};
 use crate::core::{cmd::StartArgs, error::SimpleError};
+use crate::core::{
+    records::{ContainerRecord, ContainerStatus},
+    Msg,
+};
 use crate::core::{RECORD_MANAGER, ROOT_PATH};
 
-pub async fn start_container(start_args: StartArgs, stream: UnixStream) {
+pub async fn start_container(start_args: StartArgs, mut stream: UnixStream) {
     let mut cr = match RECORD_MANAGER.get_record(&start_args.name) {
         Some(cr) => cr,
         None => {
@@ -27,7 +30,12 @@ pub async fn start_container(start_args: StartArgs, stream: UnixStream) {
                 "Failed to start container {}, record does not exist",
                 &start_args.name
             );
-            // FIXME: Error return.
+            let _ = Msg::Err(format!(
+                "Failed to start container {}, record does not exist",
+                &start_args.name
+            ))
+            .send_to(&mut stream)
+            .await;
 
             return;
         }
@@ -38,7 +46,12 @@ pub async fn start_container(start_args: StartArgs, stream: UnixStream) {
             "Failed to start container {}, it's already running",
             &start_args.name
         );
-        // FIXME: Error return.
+        let _ = Msg::Err(format!(
+            "Failed to start container {}, it's already running",
+            &start_args.name
+        ))
+        .send_to(&mut stream)
+        .await;
 
         return;
     }
@@ -54,10 +67,13 @@ pub async fn start_container(start_args: StartArgs, stream: UnixStream) {
     };
 
     cr.pid = child.as_raw();
+    cr.status = ContainerStatus::Running;
 
     // Updates records.
-    RECORD_MANAGER.set_pid(&cr.id, cr.pid);
-    RECORD_MANAGER.set_status(&cr.id, ContainerStatus::Running);
+    RECORD_MANAGER.update_record(&cr.id, |r| {
+        r.pid = cr.pid;
+        r.status = cr.status;
+    });
 
     do_run(
         &cr.name,
