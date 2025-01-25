@@ -1,12 +1,15 @@
-use std::os::fd::AsRawFd;
+use std::{
+    io::{Read, Write},
+    os::unix::net::UnixStream as StdUnixStream,
+};
 
 use cgroups_rs::{Cgroup, CgroupPid};
 use log::error;
 use nix::{
     pty::{openpty, OpenptyResult},
-    unistd::{read, write, Pid},
+    unistd::Pid,
 };
-use tokio::net::{unix::pipe, UnixStream};
+use tokio::net::UnixStream;
 
 use super::init::{do_run, new_container_process};
 use crate::core::{
@@ -16,7 +19,12 @@ use crate::core::{
 use crate::core::{Msg, ROOT_PATH};
 
 pub async fn start_container(start_args: StartArgs, mut stream: UnixStream) {
-    let meta = match CONTAINER_METAS.get_meta_by_name(&start_args.name).await {
+    let meta = match CONTAINER_METAS
+        .get()
+        .unwrap()
+        .get_meta_by_name(&start_args.name)
+        .await
+    {
         Some(meta) => meta,
         None => {
             error!(
@@ -49,7 +57,7 @@ pub async fn start_container(start_args: StartArgs, mut stream: UnixStream) {
         return;
     }
 
-    let (pty, pipe, child) = match start_prepare(&meta).await {
+    let (pty, sock, child) = match start_prepare(&meta).await {
         Ok(res) => res,
         Err(e) => {
             error!("Failed to start container: {:?}", e);
@@ -64,7 +72,7 @@ pub async fn start_container(start_args: StartArgs, mut stream: UnixStream) {
         meta.id,
         child,
         pty,
-        pipe,
+        sock,
         stream,
         start_args.detach,
     )
@@ -73,21 +81,18 @@ pub async fn start_container(start_args: StartArgs, mut stream: UnixStream) {
 
 async fn start_prepare(
     meta: &ContainerMeta,
-) -> anyhow::Result<(OpenptyResult, (pipe::Sender, pipe::Receiver), Pid)> {
+) -> anyhow::Result<(OpenptyResult, StdUnixStream, Pid)> {
     let name_id = format!("{}-{}", &meta.name, &meta.id);
     let mnt_path = format!("{}/{}/mnt", ROOT_PATH, name_id);
 
     let pty = openpty(None, None)?;
 
     // Sync between daemon and new child process (container).
-    let pipe_p = pipe::pipe()?;
-    let pipe_c = pipe::pipe()?;
-    let pipe = (pipe_p.0, pipe_c.1);
+    let (mut p_sock, c_sock) = StdUnixStream::pair()?;
     let mut buf = [0u8; 4];
 
     // Create a new process with old namespaces.
-    let child = match new_container_process(&mnt_path, (&pipe_c.0, &pipe_p.1), &pty, &meta.command)
-    {
+    let child = match new_container_process(&mnt_path, c_sock, &pty, &meta.command) {
         Ok(child) => child,
         Err(e) => {
             return Err(e);
@@ -95,11 +100,15 @@ async fn start_prepare(
     };
 
     // Wait for child ready.
-    read(pipe.0.as_raw_fd(), &mut buf).unwrap();
-    if buf == *b"EXIT" {
-        return Err(anyhow::anyhow!(
-            "Failed to start container: child unexpected exit"
-        ));
+    p_sock.read_exact(&mut buf).unwrap();
+    match &buf {
+        b"EXIT" => {
+            return Err(anyhow::anyhow!(
+                "Failed to initialize container: child unexpected exit"
+            ));
+        }
+        b"WAIT" => {}
+        _ => unreachable!(),
     }
 
     // Get the old cgroups
@@ -107,22 +116,24 @@ async fn start_prepare(
     let cg = Cgroup::load(hier, name_id);
 
     if let Err(e) = cg.add_task_by_tgid(CgroupPid::from(child.as_raw() as u64)) {
-        write(&pipe.0, b"EXIT").unwrap();
+        p_sock.write(b"EXIT").unwrap();
 
         return Err(anyhow::anyhow!("Failed to add task to cgroup: {:?}", e));
     }
 
     // Updates records.
     if let Err(e) = CONTAINER_METAS
+        .get()
+        .unwrap()
         .updates(meta.id.clone(), ContainerStatus::running(child.as_raw()))
         .await
     {
         error!("Failed to update container status: {:?}", e);
-        write(&pipe.0, b"EXIT").unwrap();
+        p_sock.write(b"EXIT").unwrap();
         let _ = cg.kill();
 
         return Err(anyhow::anyhow!("Failed to update container: {:?}", e));
     }
 
-    Ok((pty, pipe, child))
+    Ok((pty, p_sock, child))
 }

@@ -11,7 +11,12 @@ use crate::core::{
 /// Stop a running container.
 pub async fn stop_container(stop_args: StopArgs, mut stream: UnixStream) {
     // Let's first get the container pid.
-    let meta = match CONTAINER_METAS.get_meta_by_name(&stop_args.name).await {
+    let meta = match CONTAINER_METAS
+        .get()
+        .unwrap()
+        .get_meta_by_name(&stop_args.name)
+        .await
+    {
         Some(meta) => meta,
         None => {
             error!(
@@ -30,7 +35,7 @@ pub async fn stop_container(stop_args: StopArgs, mut stream: UnixStream) {
         }
     };
 
-    do_stop(meta.name, meta.id);
+    do_stop(meta.name, meta.id).await;
 
     let _ = Msg::OkContent(format!("Container {} stoped", &stop_args.name))
         .send_to(&mut stream)
@@ -51,7 +56,11 @@ pub async fn do_stop(name: String, id: String) {
     }
 
     // Update records.
-    CONTAINER_METAS.updates(id, ContainerStatus::stop()).await;
+    let _ = CONTAINER_METAS
+        .get()
+        .unwrap()
+        .updates(id, ContainerStatus::stop())
+        .await;
 
     info!("[Daemon] Container {} stopped", name);
 }

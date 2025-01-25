@@ -1,5 +1,5 @@
-// use rtain::daemon;
+use rtain::daemon;
 
 fn main() {
-    // daemon();
+    daemon();
 }

@@ -14,7 +14,12 @@ use crate::core::{cmd::ExecArgs, metas::CONTAINER_METAS};
 /// Enter a container.
 pub async fn exec_container(exec_args: ExecArgs) {
     // Let's first get the container pid.
-    let meta = match CONTAINER_METAS.get_meta_by_name(&exec_args.name).await {
+    let meta = match CONTAINER_METAS
+        .get()
+        .unwrap()
+        .get_meta_by_name(&exec_args.name)
+        .await
+    {
         Some(meta) => meta,
         None => {
             error!(

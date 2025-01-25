@@ -1,6 +1,7 @@
 use std::env;
 
 use log::{debug, error, info};
+use metas::{ContainerManager, CONTAINER_METAS};
 use tokio::{
     net::{UnixListener, UnixStream},
     task,
@@ -22,6 +23,14 @@ pub const SOCKET_PATH: &str = "/tmp/rtain_daemons.sock";
 async fn run_daemon() -> tokio::io::Result<()> {
     env::set_var("RUST_LOG", "debug");
     env_logger::init();
+    console_subscriber::init();
+
+    let container_metas = ContainerManager::default()
+        .await
+        .expect("Fatal, failed to init container metas");
+    CONTAINER_METAS
+        .set(container_metas)
+        .expect("Fatal, failed to set container metas");
 
     // Delete the old socket file
     if std::fs::exists(SOCKET_PATH).unwrap() {
@@ -35,8 +44,8 @@ async fn run_daemon() -> tokio::io::Result<()> {
         SOCKET_PATH
     );
 
-    while let Ok((stream, _addr)) = listener.accept().await {
-        debug!("[Daemon]: Accepted client connection");
+    while let Ok((stream, addr)) = listener.accept().await {
+        debug!("[Daemon]: Accepted client connection on {addr:?}");
 
         let _handler = task::spawn(handler(stream));
     }
@@ -57,10 +66,10 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
     let cli = msg.get_req().unwrap();
     match cli.command {
         Commands::Run(run_args) => run_container(run_args, stream).await,
-        Commands::Start(start_args) => start_container(start_args, stream).await,
+        // Commands::Start(start_args) => start_container(start_args, stream).await,
         // Commands::Exec(exec_args) => exec_container(exec_args),
         Commands::Stop(stop_args) => stop_container(stop_args, stream).await,
-        // Commands::RM(rm_args) => remove_container(rm_args),
+        Commands::RM(rm_args) => remove_container(rm_args, stream).await,
         Commands::PS(ps_args) => list_containers(ps_args, stream).await,
         Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
         // Commands::Commit(commit_args) => container::commit_container(commit_args),
@@ -72,9 +81,7 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
 }
 
 pub fn daemon() {
-    if let Err(e) = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
+    if let Err(e) = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(run_daemon())
     {

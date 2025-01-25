@@ -7,7 +7,12 @@ use crate::core::metas::CONTAINER_METAS;
 use crate::core::ROOT_PATH;
 
 pub async fn commit_container(cm_args: CommitArgs) {
-    let meta = match CONTAINER_METAS.get_meta_by_name(&cm_args.name).await {
+    let meta = match CONTAINER_METAS
+        .get()
+        .unwrap()
+        .get_meta_by_name(&cm_args.name)
+        .await
+    {
         Some(meta) => meta,
         None => {
             error!(

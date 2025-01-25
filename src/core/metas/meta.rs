@@ -33,6 +33,7 @@ pub struct InnerState {
 }
 
 /// Uplevel container manager.
+#[derive(Debug)]
 pub struct ContainerManager {
     storage: StorageManager,
 }
@@ -56,33 +57,37 @@ impl ContainerManager {
             cleanup_interval_secs: 3 * 60,
         };
 
-        let storage = StorageManager::new(config).await?;
-
-        Ok(Self { storage })
+        Self::new(config).await
     }
 
+    #[inline]
     pub async fn register(&self, meta: ContainerMeta) -> anyhow::Result<()> {
         self.storage.execute(StorageOperation::Create(meta)).await
     }
 
+    #[inline]
     pub async fn updates(&self, id: String, status: ContainerStatus) -> anyhow::Result<()> {
         self.storage
             .execute(StorageOperation::UpdateStatus { id, status })
             .await
     }
 
+    #[inline]
     pub async fn deregister(&self, id: String) -> anyhow::Result<()> {
         self.storage.execute(StorageOperation::Delete(id)).await
     }
 
+    #[inline]
     pub async fn get_meta_by_id(&self, id: &str) -> Option<ContainerMeta> {
         self.storage.get_meta_by_id(id).await
     }
 
+    #[inline]
     pub async fn get_meta_by_name(&self, name: &str) -> Option<ContainerMeta> {
         self.storage.get_meta_by_name(name).await
     }
 
+    #[inline]
     pub async fn get_all_metas(&self) -> Vec<ContainerMeta> {
         self.storage.get_all_metas().await
     }
@@ -127,7 +132,7 @@ impl ContainerStatus {
         }
     }
 
-    pub fn stop() ->  Self {
+    pub fn stop() -> Self {
         Self::Stopped {
             stopped_at: current_time(),
         }

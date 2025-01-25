@@ -57,6 +57,19 @@ pub async fn client_show_logs(args: LogsArgs, mut stream: UnixStream) {
     }
 }
 
+pub async fn client_remove_container(_args: RMArgs, mut stream: UnixStream) {
+    match Msg::recv_from(&mut stream).await {
+        Ok(msg) => match msg {
+            Msg::OkContent(cont) => println!("{cont}"),
+            Msg::Err(e) => eprintln!("Failed to rm containers, due to: {e}"),
+            _ => unreachable!(),
+        },
+        Err(e) => {
+            eprintln!("Failed to recv msg from daemon: {e}");
+        }
+    }
+}
+
 #[inline]
 async fn client_do_run(detach: bool, mut stream: UnixStream) {
     if detach {
@@ -98,7 +111,6 @@ async fn client_do_run(detach: bool, mut stream: UnixStream) {
                     break;
                 }
                 stdout.write_all(&buffer[..bytes_read])?;
-                stdout.flush()?;
             }
             Ok::<(), tokio::io::Error>(())
         });

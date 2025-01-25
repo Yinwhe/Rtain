@@ -10,7 +10,7 @@ use crate::core::metas::CONTAINER_METAS;
 use crate::core::{Msg, ROOT_PATH};
 
 pub async fn list_containers(_ps_args: PSArgs, mut stream: UnixStream) {
-    let metas = CONTAINER_METAS.get_all_metas().await;
+    let metas = CONTAINER_METAS.get().unwrap().get_all_metas().await;
 
     let mut tw = TabWriter::new(vec![]);
     let _ = tw.write_all(b"ID\tNAME\tPID\tCOMMAND\tSTATUS\n");
@@ -21,7 +21,7 @@ pub async fn list_containers(_ps_args: PSArgs, mut stream: UnixStream) {
             "{}\t{}\t{}\t{}\t{:?}",
             meta.id,
             meta.name,
-            meta.get_pid().unwrap_or(-1),
+            meta.get_pid().unwrap_or(0),
             meta.command.join(" "),
             meta.status
         );
@@ -44,7 +44,12 @@ pub async fn list_containers(_ps_args: PSArgs, mut stream: UnixStream) {
 }
 
 pub async fn show_logs(log_args: LogsArgs, mut stream: UnixStream) {
-    let meta = match CONTAINER_METAS.get_meta_by_name(&log_args.name).await {
+    let meta = match CONTAINER_METAS
+        .get()
+        .unwrap()
+        .get_meta_by_name(&log_args.name)
+        .await
+    {
         Some(meta) => meta,
         None => {
             error!(

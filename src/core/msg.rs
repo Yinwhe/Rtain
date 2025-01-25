@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::CLI;
 
@@ -20,19 +20,24 @@ impl Msg {
         self,
         stream: &mut (impl AsyncWriteExt + std::marker::Unpin),
     ) -> tokio::io::Result<()> {
-        let msg = self.prepare();
+        let msg = bincode::serialize(&self).unwrap();
+        let len = (msg.len() as u64).to_le_bytes().to_vec();
+
+        stream.write_all(&len).await?;
         stream.write_all(&msg).await
     }
 
     pub async fn recv_from(
         stream: &mut (impl AsyncReadExt + std::marker::Unpin),
     ) -> tokio::io::Result<Self> {
-        let mut bufreader = BufReader::new(stream);
-        let mut buf = String::new();
+        let mut len_buf = [0; 8];
+        stream.read_exact(&mut len_buf).await?;
 
-        bufreader.read_line(&mut buf).await?;
+        let buf_len = u64::from_le_bytes(len_buf);
+        let mut buf = vec![0u8; buf_len as usize];
+        stream.read_exact(&mut buf).await?;
 
-        bincode::deserialize(buf.as_bytes())
+        bincode::deserialize(&buf)
             .map_err(|e| tokio::io::Error::new(tokio::io::ErrorKind::InvalidData, e))
     }
 
@@ -41,20 +46,5 @@ impl Msg {
             Msg::Req(cli) => Some(cli),
             _ => None,
         }
-    }
-
-    pub fn get_okcont(self) -> Option<String> {
-        match self {
-            Msg::OkContent(cont) => Some(cont),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    fn prepare(self) -> Vec<u8> {
-        let mut msg = bincode::serialize(&self).unwrap();
-        msg.push(b'\n');
-
-        msg
     }
 }

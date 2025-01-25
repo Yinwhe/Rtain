@@ -1,4 +1,4 @@
-// mod cli;
-// mod ops;
+mod cli;
+mod ops;
 
-// pub use cli::client;
+pub use cli::client;

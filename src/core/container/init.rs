@@ -1,19 +1,27 @@
-use std::{ffi::CString, os::fd::AsRawFd, path::Path, sync::Arc};
+use std::{
+    ffi::CString,
+    io::{Read, Write},
+    os::{fd::AsRawFd, unix::net::UnixStream as StdUnixStream},
+    path::Path,
+    sync::Arc,
+};
 
 use cgroups_rs::{cgroup_builder::CgroupBuilder, Cgroup, CgroupPid};
 use log::{debug, error, info};
 use nix::{
+    fcntl::{fcntl, FcntlArg, OFlag},
     libc::SIGCHLD,
     mount::{mount, umount2, MntFlags, MsFlags},
     pty::{openpty, OpenptyResult},
     sched::{clone, CloneFlags},
-    sys::wait::{waitpid, WaitStatus},
+    sys::wait::{waitpid, WaitPidFlag, WaitStatus},
     unistd::{chdir, dup2, execvp, pivot_root, read, write, Pid},
 };
 use rand::{thread_rng, Rng};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{unix::pipe, UnixStream},
+    io::{unix::AsyncFd, AsyncReadExt, AsyncWriteExt},
+    net::UnixStream,
+    signal::unix::{signal, SignalKind},
     sync::Mutex,
 };
 
@@ -27,20 +35,20 @@ use crate::core::{
 use super::image::{delete_workspace, new_workspace};
 
 /// Run a new container from given image.
-pub async fn run_container(run_args: RunArgs, stream: UnixStream) {
+pub async fn run_container(run_args: RunArgs, mut stream: UnixStream) {
     let detach = run_args.detach;
-    let (pty, pipe, meta) = match run_prepare(run_args).await {
+    let (pty, sock, meta) = match run_prepare(run_args).await {
         Ok(res) => res,
         Err(e) => {
             error!("Failed to run container: {:?}", e);
-            // FIXME: Error return.
+            let _ = Msg::Err(e.to_string()).send_to(&mut stream).await;
 
             return;
         }
     };
 
     let pid = Pid::from_raw(meta.get_pid().unwrap());
-    do_run(meta.name, meta.id, pid, pty, pipe, stream, detach).await;
+    do_run(meta.name, meta.id, pid, pty, sock, stream, detach).await;
 }
 
 pub async fn do_run(
@@ -48,7 +56,7 @@ pub async fn do_run(
     id: String,
     child: Pid,
     pty: OpenptyResult,
-    pipe: (pipe::Sender, pipe::Receiver),
+    mut p_sock: StdUnixStream,
     stream: UnixStream,
     detach: bool,
 ) {
@@ -60,7 +68,11 @@ pub async fn do_run(
     let root_path = format!("{}/{}", ROOT_PATH, name_id);
 
     let _slave_fd = pty.slave;
-    let master_fd = Arc::new(pty.master);
+    let flags = fcntl(pty.master.as_raw_fd(), FcntlArg::F_GETFL).unwrap();
+    let new_flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
+    fcntl(pty.master.as_raw_fd(), FcntlArg::F_SETFL(new_flags)).unwrap();
+    let master_async_fd = Arc::new(AsyncFd::new(pty.master).unwrap());
+
     let mut log_file = match tokio::fs::File::options()
         .write(true)
         .truncate(true)
@@ -71,7 +83,7 @@ pub async fn do_run(
         Ok(f) => f,
         Err(e) => {
             error!("Failed to open log file: {:?}", e);
-            write(&pipe.0, b"EXIT").unwrap();
+            p_sock.write(b"EXIT").unwrap();
 
             return;
         }
@@ -81,24 +93,30 @@ pub async fn do_run(
     let container_reader = Arc::new(Mutex::new(container_reader));
 
     // Capture container outs.
-    let master_reader = Arc::clone(&master_fd);
+    let master_async_reader = master_async_fd.clone();
     let read_from_pty = tokio::spawn(async move {
         let mut buffer = vec![0u8; 1024];
         loop {
-            match read(master_reader.as_raw_fd(), &mut buffer) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    if let Err(e) = container_sender.write_all(&buffer[..n]).await {
-                        error!("Error writing to client: {}", e);
-                        break;
+            let mut guard = master_async_reader.readable().await.unwrap();
+            if let Ok(res) = guard.try_io(|fd| {
+                read(fd.as_raw_fd(), &mut buffer)
+                    .map_err(|e| std::io::Error::from_raw_os_error(e as i32))
+            }) {
+                match res {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        if let Err(e) = container_sender.write_all(&buffer[..n]).await {
+                            error!("Error writing to client: {}", e);
+                            break;
+                        }
                     }
+                    Err(_e) => break,
                 }
-                Err(_e) => break,
             }
         }
     });
 
-    write(&pipe.0, b"CONT").unwrap();
+    p_sock.write(b"CONT").unwrap();
 
     if !detach {
         debug!("[Daemon]: Attach, redirecting stdio to PTY");
@@ -123,14 +141,14 @@ pub async fn do_run(
                             error!("Error writing to client: {}", e);
                             break;
                         }
+                        // debug!("Send {} to client!", String::from_utf8_lossy(&buffer[..n]));
                     }
                     Err(_e) => break,
                 }
             }
         });
-
         // Client writes to the pty.
-        let master_writer = Arc::clone(&master_fd);
+        let master_async_writer = master_async_fd.clone();
         let client_reader = Arc::clone(&stream_reader);
         let client_to_pty = tokio::spawn(async move {
             let mut buffer = vec![0u8; 1024];
@@ -139,10 +157,18 @@ pub async fn do_run(
                 match client_reader.read(&mut buffer).await {
                     Ok(0) => break, // EOF
                     Ok(n) => {
-                        if let Err(e) = write(&master_writer, &buffer[..n]) {
-                            error!("Error writing to client: {}", e);
+                        let mut guard = master_async_writer.writable().await.unwrap();
+                        if let Err(e) = guard
+                            .try_io(|fd| {
+                                write(fd, &buffer[..n])
+                                    .map_err(|e| std::io::Error::from_raw_os_error(e as i32))
+                            })
+                            .unwrap()
+                        {
+                            error!("Error writing to pty: {}", e);
                             break;
                         }
+                        // debug!("Send {} to pty!", String::from_utf8_lossy(&buffer[..n]));
                     }
                     Err(e) => {
                         error!("Error reading from client: {}", e);
@@ -153,11 +179,27 @@ pub async fn do_run(
         });
 
         // Child exits watcher
-        let check_child_exit = tokio::spawn(async move { waitpid(child, None) });
+        let check_child_exit = tokio::spawn(async move {
+            async fn signal_driven_wait(pid: Pid) -> anyhow::Result<WaitStatus> {
+                let mut sigchild = signal(SignalKind::child())?;
 
+                loop {
+                    sigchild.recv().await;
+
+                    match waitpid(Some(pid), Some(WaitPidFlag::WNOHANG))? {
+                        WaitStatus::StillAlive => continue,
+                        status => return Ok(status),
+                    }
+                }
+            }
+
+            signal_driven_wait(child).await
+        });
         tokio::select! {
             _ = client_to_pty => {
                 // Write to PTY finished, client exits, and in current impl, we end the container here.
+                debug!("[Daemon]: Client exits, stopping container");
+
                 pty_to_client.abort();
             }
             wait_res = check_child_exit => {
@@ -173,9 +215,15 @@ pub async fn do_run(
                                 let msg = format!( "Container exited with code: {code}");
                                 stream_writer.lock().await.write_all(msg.as_bytes()).await.unwrap();
 
-                                info!("{}", msg);
+                                info!("[Daemon] {}", msg);
                             }
-                            _ => unimplemented!("Other wait status are not implemented currently"),
+                            WaitStatus::Signaled(_, signal, _) => {
+                                let msg = format!("Container exited with signal: {signal}");
+                                stream_writer.lock().await.write_all(msg.as_bytes()).await.unwrap();
+
+                                info!("[Daemon] {}", msg);
+                            }
+                            _ => unimplemented!("Waitpid status: {:?}", status),
                         }
                     }
                     Err(e) => unimplemented!("Waitpid error: {:?}", e),
@@ -206,12 +254,12 @@ pub async fn do_run(
         pty_to_log.abort();
     }
 
-    do_stop(name, id);
+    do_stop(name, id).await;
 }
 
 async fn run_prepare(
     run_args: RunArgs,
-) -> anyhow::Result<(OpenptyResult, (pipe::Sender, pipe::Receiver), ContainerMeta)> {
+) -> anyhow::Result<(OpenptyResult, StdUnixStream, ContainerMeta)> {
     // Generate name-id.
     let id = random_id();
     let name = run_args.name.unwrap_or_else(|| id.clone());
@@ -226,41 +274,42 @@ async fn run_prepare(
     let pty = openpty(None, None)?;
 
     // Sync between daemon and new child process (container).
-    let pipe_p = pipe::pipe()?;
-    let pipe_c = pipe::pipe()?;
-    let pipe = (pipe_p.0, pipe_c.1);
+    let (mut p_sock, c_sock) = StdUnixStream::pair()?;
     let mut buf = [0u8; 4];
 
     // Here we create the whole workspace.
     new_workspace(&run_args.image, &root_path, &mnt_path, &run_args.volume).await?;
 
     // Create a new process with new namespaces.
-    let child =
-        match new_container_process(&mnt_path, (&pipe_c.0, &pipe_p.1), &pty, &run_args.command) {
-            Ok(child) => child,
-            Err(e) => {
-                // Clone child failure, clean up.
-                let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
-                return Err(e);
-            }
-        };
+    let child = match new_container_process(&mnt_path, c_sock, &pty, &run_args.command) {
+        Ok(child) => child,
+        Err(e) => {
+            // Clone child failure, clean up.
+            let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
+            return Err(e);
+        }
+    };
 
     // Wait for child ready.
-    read(pipe.1.as_raw_fd(), &mut buf).unwrap();
-    if buf == *b"EXIT" {
-        // Child failed to initialize, clean up.
-        delete_workspace(&root_path, &mnt_path, &run_args.volume).await?;
+    p_sock.read_exact(&mut buf).unwrap();
+    match &buf {
+        b"EXIT" => {
+            // Child failed to initialize, clean up.
+            delete_workspace(&root_path, &mnt_path, &run_args.volume).await?;
 
-        return Err(anyhow::anyhow!(
-            "Failed to initialize container: child unexpected exit"
-        ));
+            return Err(anyhow::anyhow!(
+                "Failed to initialize container: child unexpected exit"
+            ));
+        }
+        b"WAIT" => {}
+        _ => unreachable!(),
     }
 
     // Setting up cgroups
     let cg = match setup_cgroup(&name_id, child) {
         Ok(cg) => cg,
         Err(e) => {
-            write(&pipe.0, b"EXIT").unwrap();
+            p_sock.write(b"EXIT").unwrap();
             let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
 
             return Err(anyhow::anyhow!("Failed to setup cgroup: {:?}", e));
@@ -270,15 +319,15 @@ async fn run_prepare(
     // Form the container record.
     let cm = ContainerMeta::new(name, id, child.as_raw(), run_args.command);
 
-    if let Err(e) = CONTAINER_METAS.register(cm.clone()).await {
-        write(&pipe.0, b"EXIT").unwrap();
+    if let Err(e) = CONTAINER_METAS.get().unwrap().register(cm.clone()).await {
+        p_sock.write(b"EXIT").unwrap();
         let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
         let _ = cg.delete();
 
         return Err(anyhow::anyhow!("Failed to register container: {:?}", e));
     }
 
-    Ok((pty, pipe, cm))
+    Ok((pty, p_sock, cm))
 }
 
 /// This is the first process in the new namespace.
@@ -298,7 +347,7 @@ fn do_init(command: &Vec<String>) -> anyhow::Result<()> {
 /// Create a new process with new namespaces and return its pid.
 pub fn new_container_process(
     mnt_path: &str,
-    pipe: (&pipe::Sender, &pipe::Receiver),
+    mut c_sock: StdUnixStream,
     pty: &OpenptyResult,
     command: &Vec<String>,
 ) -> anyhow::Result<Pid> {
@@ -326,7 +375,7 @@ pub fn new_container_process(
         };
 
         if let Err(e) = setup_stdio() {
-            write(pipe.0, b"EXIT").unwrap();
+            c_sock.write(b"EXIT").unwrap();
 
             error!("Container initializer failure: {:?}", e);
             return -1;
@@ -334,18 +383,18 @@ pub fn new_container_process(
 
         // Switch root here.
         if let Err(e) = setup_mount(mnt_path) {
-            write(pipe.0, b"EXIT").unwrap();
+            c_sock.write(b"EXIT").unwrap();
 
             error!("Container initializer failure: {:?}", e);
             return -1;
         }
 
         // Inform the parents ready.
-        write(pipe.0, b"WAIT").unwrap();
+        c_sock.write(b"WAIT").unwrap();
 
         // Wait for parent ready.
         let mut buf = [0u8; 4];
-        read(pipe.1.as_raw_fd(), &mut buf).unwrap();
+        c_sock.read_exact(&mut buf).unwrap();
 
         match &buf {
             b"EXIT" => {

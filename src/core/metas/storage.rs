@@ -107,6 +107,7 @@ impl StorageManager {
             let snapshot_inner = inner.clone();
             let snapshot_task = tokio::spawn(async move {
                 let mut interval = snapshot_interval;
+                interval.tick().await;
                 loop {
                     interval.tick().await;
                     let locked_inner = snapshot_inner.lock().await;
@@ -124,6 +125,7 @@ impl StorageManager {
             let cleanup_inner = inner.clone();
             let cleanup_task = tokio::spawn(async move {
                 let mut interval = cleanup_interval;
+                interval.tick().await;
                 loop {
                     interval.tick().await;
                     let mut locked_inner = cleanup_inner.lock().await;
@@ -151,7 +153,7 @@ impl StorageManager {
                         // WAL first.
                         if let Err(e) = locked_inner.wal.write_operation(&op).await {
                             log::error!("Failed to write WAL: {e}");
-                            let _ = ack_tx.send(Err(e));
+                            ack_tx.send(Err(e)).unwrap();
 
                             continue;
                         }
@@ -159,12 +161,12 @@ impl StorageManager {
                         // Updates data in memory.
                         if let Err(e) = locked_inner.state.apply_operation(op) {
                             log::error!("Failed to snapshot: {e}");
-                            let _ = ack_tx.send(Err(e));
+                            ack_tx.send(Err(e)).unwrap();
 
                             continue;
                         }
 
-                        let _ = ack_tx.send(Ok(()));
+                        ack_tx.send(Ok(())).unwrap();
                     }
                     None => {
                         break;
