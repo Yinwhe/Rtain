@@ -75,6 +75,7 @@ pub async fn start_container(start_args: StartArgs, mut stream: UnixStream) {
         sock,
         stream,
         start_args.detach,
+        true,
     )
     .await;
 }

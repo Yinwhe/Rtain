@@ -15,6 +15,10 @@ pub async fn client_start_container(args: StartArgs, stream: UnixStream) {
     client_do_run(args.detach, stream).await;
 }
 
+pub async fn client_exec_container(_args: ExecArgs, stream: UnixStream) {
+    client_do_run(false, stream).await;
+}
+
 pub async fn client_stop_container(args: StopArgs, mut stream: UnixStream) {
     match Msg::recv_from(&mut stream).await {
         Ok(msg) => match msg {

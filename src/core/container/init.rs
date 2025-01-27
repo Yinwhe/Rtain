@@ -48,7 +48,7 @@ pub async fn run_container(run_args: RunArgs, mut stream: UnixStream) {
     };
 
     let pid = Pid::from_raw(meta.get_pid().unwrap());
-    do_run(meta.name, meta.id, pid, pty, sock, stream, detach).await;
+    do_run(meta.name, meta.id, pid, pty, sock, stream, detach, true).await;
 }
 
 pub async fn do_run(
@@ -59,6 +59,7 @@ pub async fn do_run(
     mut p_sock: StdUnixStream,
     stream: UnixStream,
     detach: bool,
+    stop_after_exit: bool,
 ) {
     let (stream_reader, stream_writer) = stream.into_split();
     let stream_reader = Arc::new(Mutex::new(stream_reader));
@@ -254,7 +255,9 @@ pub async fn do_run(
         pty_to_log.abort();
     }
 
-    do_stop(name, id).await;
+    if stop_after_exit {
+        do_stop(name, id).await;
+    }
 }
 
 async fn run_prepare(

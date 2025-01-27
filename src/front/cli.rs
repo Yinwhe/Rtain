@@ -20,7 +20,7 @@ async fn run_client() -> tokio::io::Result<()> {
     match cli.command {
         Commands::Run(run_args) => client_run_container(run_args, stream).await,
         Commands::Start(start_args) => client_start_container(start_args, stream).await,
-        // // Commands::Exec(exec_args) => exec_container(exec_args),
+        Commands::Exec(exec_args) => client_exec_container(exec_args, stream).await,
         Commands::Stop(stop_args) => client_stop_container(stop_args, stream).await,
         Commands::RM(rm_args) => client_remove_container(rm_args, stream).await,
         Commands::PS(ps_args) => client_list_containers(ps_args, stream).await,
