@@ -72,8 +72,7 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
         Commands::RM(rm_args) => remove_container(rm_args, stream).await,
         Commands::PS(ps_args) => list_containers(ps_args, stream).await,
         Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
-        // Commands::Commit(commit_args) => container::commit_container(commit_args),
-        _ => unimplemented!(),
+        Commands::Commit(commit_args) => commit_container(commit_args, stream).await,
     };
 
     debug!("[Daemon]: Task done, daemon disconnected");

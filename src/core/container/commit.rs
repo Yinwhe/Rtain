@@ -1,12 +1,13 @@
 use std::{path::Path, process::Command};
 
 use log::{debug, error};
+use tokio::net::UnixStream;
 
 use crate::core::cmd::CommitArgs;
 use crate::core::metas::CONTAINER_METAS;
-use crate::core::ROOT_PATH;
+use crate::core::{Msg, ROOT_PATH};
 
-pub async fn commit_container(cm_args: CommitArgs) {
+pub async fn commit_container(cm_args: CommitArgs, mut stream: UnixStream) {
     let meta = match CONTAINER_METAS
         .get()
         .unwrap()
@@ -19,6 +20,14 @@ pub async fn commit_container(cm_args: CommitArgs) {
                 "Failed to commit container {}, record does not exist",
                 &cm_args.name
             );
+
+            let _ = Msg::Err(format!(
+                "Failed to commit container {}, record does not exist",
+                cm_args.name
+            ))
+            .send_to(&mut stream)
+            .await;
+
             return;
         }
     };
@@ -36,14 +45,6 @@ pub async fn commit_container(cm_args: CommitArgs) {
         &image_path.to_string_lossy()
     );
 
-    if !mnt_path.exists() {
-        error!(
-            "Failed to commit container {}, mount path not existed",
-            &cm_args.name
-        );
-        return;
-    }
-
     // Use tar command to create an image tarball
     let output = match Command::new("tar")
         .arg("-czf")
@@ -59,6 +60,14 @@ pub async fn commit_container(cm_args: CommitArgs) {
                 "Failed to commit container {}, due to: {}",
                 &cm_args.name, e
             );
+
+            let _ = Msg::Err(format!(
+                "Failed to commit container {}, cannot tar the image: {}",
+                cm_args.name, e
+            ))
+            .send_to(&mut stream)
+            .await;
+
             return;
         }
     };
@@ -68,6 +77,21 @@ pub async fn commit_container(cm_args: CommitArgs) {
             "Failed to commit container {}, tar command failed",
             &cm_args.name
         );
+        let error = String::from_utf8_lossy(&output.stderr);
+        let _ = Msg::Err(format!(
+            "Failed to commit container {}, tar command failed: {}",
+            cm_args.name, error
+        ))
+        .send_to(&mut stream)
+        .await;
+
         return;
     }
+
+    let _ = Msg::OkContent(format!(
+        "Container {} commited to image {}",
+        cm_args.name, cm_args.image
+    ))
+    .send_to(&mut stream)
+    .await;
 }

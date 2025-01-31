@@ -74,6 +74,19 @@ pub async fn client_remove_container(_args: RMArgs, mut stream: UnixStream) {
     }
 }
 
+pub async fn client_commit_container(_args: CommitArgs, mut stream: UnixStream) {
+    match Msg::recv_from(&mut stream).await {
+        Ok(msg) => match msg {
+            Msg::OkContent(cont) => println!("{cont}"),
+            Msg::Err(e) => eprintln!("Failed to commit container, due to: {e}"),
+            _ => unreachable!(),
+        },
+        Err(e) => {
+            eprintln!("Failed to recv msg from daemon: {e}");
+        }
+    }
+}
+
 #[inline]
 async fn client_do_run(detach: bool, mut stream: UnixStream) {
     if detach {

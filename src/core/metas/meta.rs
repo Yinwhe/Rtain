@@ -78,6 +78,7 @@ impl ContainerManager {
     }
 
     #[inline]
+    #[allow(unused)]
     pub async fn get_meta_by_id(&self, id: &str) -> Option<ContainerMeta> {
         self.storage.get_meta_by_id(id).await
     }
@@ -119,10 +120,6 @@ impl ContainerMeta {
 impl ContainerStatus {
     pub fn is_running(&self) -> bool {
         matches!(self, Self::Running { .. })
-    }
-
-    pub fn is_stopped(&self) -> bool {
-        matches!(self, Self::Stopped { .. })
     }
 
     pub fn running(pid: i32) -> Self {

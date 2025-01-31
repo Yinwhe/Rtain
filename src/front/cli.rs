@@ -25,8 +25,7 @@ async fn run_client() -> tokio::io::Result<()> {
         Commands::RM(rm_args) => client_remove_container(rm_args, stream).await,
         Commands::PS(ps_args) => client_list_containers(ps_args, stream).await,
         Commands::Logs(logs_args) => client_show_logs(logs_args, stream).await,
-        // // Commands::Commit(commit_args) => container::commit_container(commit_args),
-        _ => unimplemented!(),
+        Commands::Commit(commit_args) => client_commit_container(commit_args, stream).await,
     }
 
     Ok(())

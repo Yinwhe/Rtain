@@ -28,6 +28,7 @@ pub struct StorageConfig {
 pub struct StorageManager {
     op_sender: Arc<Mutex<mpsc::Sender<(StorageOperation, oneshot::Sender<anyhow::Result<()>>)>>>,
     inner: Arc<Mutex<StorageInner>>,
+    #[allow(unused)]
     worker: JoinHandle<()>,
 }
 
@@ -180,6 +181,7 @@ impl StorageManager {
 }
 
 impl StorageManager {
+    #[allow(unused)]
     pub async fn get_meta_by_id(&self, id: &str) -> Option<ContainerMeta> {
         self.inner
             .lock()
