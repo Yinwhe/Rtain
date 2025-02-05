@@ -2,6 +2,7 @@ use std::env;
 
 use log::{debug, error, info};
 use metas::{ContainerManager, CONTAINER_METAS};
+use network::{create_network, NETWORKS};
 use tokio::{
     net::{UnixListener, UnixStream},
     task,
@@ -11,6 +12,7 @@ mod cmd;
 mod container;
 mod metas;
 mod msg;
+mod network;
 
 use container::*;
 
@@ -31,6 +33,12 @@ async fn run_daemon() -> tokio::io::Result<()> {
     CONTAINER_METAS
         .set(container_metas)
         .expect("Fatal, failed to set container metas");
+
+    let networks = network::Networks::load(format!("{ROOT_PATH}/net/networks"))
+        .expect("Fatal, failed to init network metas");
+    NETWORKS
+        .set(tokio::sync::Mutex::new(networks))
+        .expect("Fatal, failed to set network metas");
 
     // Delete the old socket file
     if std::fs::exists(SOCKET_PATH).unwrap() {
@@ -73,6 +81,9 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
         Commands::PS(ps_args) => list_containers(ps_args, stream).await,
         Commands::Logs(logs_args) => show_logs(logs_args, stream).await,
         Commands::Commit(commit_args) => commit_container(commit_args, stream).await,
+        Commands::Network(network_commands) => match network_commands {
+            NetworkCommands::Create(netcreate_args) => create_network(netcreate_args, stream).await,
+        },
     };
 
     debug!("[Daemon]: Task done, daemon disconnected");

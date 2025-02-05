@@ -150,8 +150,6 @@ pub async fn delete_workspace(
 }
 
 async fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> anyhow::Result<()> {
-    debug!("[Daemon] Mounting volume: {:?}", volume_path);
-
     let hostv = Path::new(volume_path[0]);
     let contv = mnt_path.join(volume_path[1].strip_prefix("/").unwrap());
 
@@ -175,8 +173,6 @@ async fn mount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> anyhow::Result
 }
 
 async fn umount_volume(mnt_path: &Path, volume_path: Vec<&str>) -> anyhow::Result<()> {
-    debug!("[Daemon] Unmounting volume: {:?}", volume_path);
-
     let contv = mnt_path.join(volume_path[1].strip_prefix("/").unwrap());
 
     umount2(&contv, MntFlags::MNT_DETACH)?;

@@ -75,7 +75,7 @@ pub async fn exec_container(exec_args: ExecArgs, mut stream: UnixStream) {
         Ok(res) => res,
         Err(e) => {
             error!("Failed to start container: {:?}", e);
-            // FIXME: Error return.
+            let _ = Msg::Err(e.to_string()).send_to(&mut stream).await;
 
             return;
         }

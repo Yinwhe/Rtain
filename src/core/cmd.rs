@@ -27,6 +27,10 @@ pub enum Commands {
     Logs(LogsArgs),
     /// Commit a container to an image.
     Commit(CommitArgs),
+
+    /// Network commands.
+    #[command(subcommand)]
+    Network(NetworkCommands),
 }
 
 #[derive(Args, Debug, Serialize, Deserialize, Clone)]
@@ -105,6 +109,26 @@ pub struct CommitArgs {
     pub name: String,
     /// Committed image name.
     pub image: String,
+}
+
+#[derive(Subcommand, Debug, Serialize, Deserialize, Clone)]
+pub enum NetworkCommands {
+    Create(NetCreateArgs),
+}
+
+#[derive(Args, Debug, Serialize, Deserialize, Clone)]
+pub struct NetCreateArgs {
+    /// Subnet of the network.
+    #[arg(long)]
+    pub subnet: String,
+
+    /// Driver used of the network, currently only `bridge` supported.
+    #[arg(long, default_value = "bridge")]
+    pub driver: String,
+
+    /// Network name (must be the last argument).
+    #[arg(required = true, value_parser)]
+    pub name: String,
 }
 
 /// Parse a memory size string into bytes.

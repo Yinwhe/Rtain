@@ -1,6 +1,6 @@
 use std::{path::Path, process::Command};
 
-use log::{debug, error};
+use log::error;
 use tokio::net::UnixStream;
 
 use crate::core::cmd::CommitArgs;
@@ -36,14 +36,6 @@ pub async fn commit_container(cm_args: CommitArgs, mut stream: UnixStream) {
 
     let mnt_path = Path::new(ROOT_PATH).join(name_id).join("mnt");
     let image_path = Path::new(&cm_args.image).join(format!("{}.tar", cm_args.image));
-
-    debug!(
-        "Commit container {}({}) to image {}({})",
-        &cm_args.name,
-        &mnt_path.to_string_lossy(),
-        &cm_args.image,
-        &image_path.to_string_lossy()
-    );
 
     // Use tar command to create an image tarball
     let output = match Command::new("tar")

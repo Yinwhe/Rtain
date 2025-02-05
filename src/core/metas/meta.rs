@@ -47,8 +47,8 @@ impl ContainerManager {
 
     pub async fn default() -> anyhow::Result<Self> {
         let config = StorageConfig {
-            wal_dir: PathBuf::from(format!("{ROOT_PATH}/wal")),
-            snapshots_dir: PathBuf::from(format!("{ROOT_PATH}/snapshots")),
+            wal_dir: PathBuf::from(format!("{ROOT_PATH}/containermetas/wal")),
+            snapshots_dir: PathBuf::from(format!("{ROOT_PATH}/containermetas/snapshots")),
 
             max_wals: 10,
             max_snapshots: 10,

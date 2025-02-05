@@ -26,6 +26,9 @@ async fn run_client() -> tokio::io::Result<()> {
         Commands::PS(ps_args) => client_list_containers(ps_args, stream).await,
         Commands::Logs(logs_args) => client_show_logs(logs_args, stream).await,
         Commands::Commit(commit_args) => client_commit_container(commit_args, stream).await,
+        Commands::Network(network_commands) => match network_commands {
+            _ => unimplemented!(),
+        },
     }
 
     Ok(())
