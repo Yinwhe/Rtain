@@ -41,7 +41,7 @@ async fn run_daemon() -> tokio::io::Result<()> {
         .expect("Fatal, failed to set network metas");
 
     // Delete the old socket file
-    if std::fs::exists(SOCKET_PATH).unwrap() {
+    if std::fs::exists(SOCKET_PATH).unwrap_or(false) {
         std::fs::remove_file(SOCKET_PATH)?;
     }
 
@@ -71,7 +71,13 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
         }
     };
 
-    let cli = msg.get_req().unwrap();
+    let cli = match msg.get_req() {
+        Some(cli) => cli,
+        None => {
+            error!("[Daemon] Invalid message format");
+            return Ok(());
+        }
+    };
     match cli.command {
         Commands::Run(run_args) => run_container(run_args, stream).await,
         Commands::Start(start_args) => start_container(start_args, stream).await,
@@ -91,10 +97,15 @@ async fn handler(mut stream: UnixStream) -> tokio::io::Result<()> {
 }
 
 pub fn daemon() {
-    if let Err(e) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(run_daemon())
-    {
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("Failed to create tokio runtime: {}", e);
+            return;
+        }
+    };
+    
+    if let Err(e) = runtime.block_on(run_daemon()) {
         eprintln!("Error: {}", e);
     }
 }

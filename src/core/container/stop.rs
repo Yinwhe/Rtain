@@ -11,9 +11,18 @@ use crate::core::{
 /// Stop a running container.
 pub async fn stop_container(stop_args: StopArgs, mut stream: UnixStream) {
     // Let's first get the container pid.
-    let meta = match CONTAINER_METAS
-        .get()
-        .unwrap()
+    let container_metas = match CONTAINER_METAS.get() {
+        Some(metas) => metas,
+        None => {
+            error!("Container metas not initialized");
+            let _ = Msg::Err("Container metas not initialized".to_string())
+                .send_to(&mut stream)
+                .await;
+            return;
+        }
+    };
+    
+    let meta = match container_metas
         .get_meta_by_name(&stop_args.name)
         .await
     {
@@ -56,11 +65,11 @@ pub async fn do_stop(name: String, id: String) {
     }
 
     // Update records.
-    let _ = CONTAINER_METAS
-        .get()
-        .unwrap()
-        .updates(id, ContainerStatus::stop())
-        .await;
+    if let Some(container_metas) = CONTAINER_METAS.get() {
+        let _ = container_metas.updates(id, ContainerStatus::stop()).await;
+    } else {
+        error!("Container metas not initialized during stop");
+    }
 
     info!("[Daemon] Container {} stopped", name);
 }

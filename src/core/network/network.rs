@@ -83,7 +83,17 @@ where
 const BRIDGEDRIVER: BridgeDriver = BridgeDriver {};
 
 pub async fn create_network(create_args: NetCreateArgs, mut stream: UnixStream) {
-    let mut networks_locked = NETWORKS.get().unwrap().lock().await;
+    let networks = match NETWORKS.get() {
+        Some(networks) => networks,
+        None => {
+            log::error!("Networks not initialized");
+            let _ = Msg::Err("Networks not initialized".to_string())
+                .send_to(&mut stream)
+                .await;
+            return;
+        }
+    };
+    let mut networks_locked = networks.lock().await;
 
     if networks_locked.networks.contains_key(&create_args.name) {
         log::error!(

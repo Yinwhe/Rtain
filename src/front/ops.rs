@@ -137,3 +137,19 @@ async fn client_do_run(detach: bool, mut stream: UnixStream) {
         write_to_daemon.abort();
     }
 }
+
+pub async fn client_create_network(args: crate::core::NetCreateArgs, mut stream: UnixStream) {
+    match Msg::recv_from(&mut stream).await {
+        Ok(msg) => match msg {
+            Msg::OkContent(cont) => println!("{cont}"),
+            Msg::Err(e) => eprintln!(
+                "Failed to create network {}, due to: {e}",
+                args.name
+            ),
+            _ => eprintln!("Unexpected response from daemon"),
+        },
+        Err(e) => {
+            eprintln!("Failed to recv msg from daemon: {e}");
+        }
+    }
+}

@@ -219,22 +219,25 @@ impl StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn mock_storage_config() -> StorageConfig {
-        StorageConfig {
-            wal_dir: PathBuf::from("/tmp/mock/wal"),
-            snapshots_dir: PathBuf::from("/tmp/mock/snapshots"),
+
+    #[tokio::test]
+    async fn test_storage_manager_new() {
+        use tempfile::TempDir;
+        
+        // Create temporary directories for test isolation
+        let temp_wal = TempDir::new().unwrap();
+        let temp_snapshots = TempDir::new().unwrap();
+        
+        let config = StorageConfig {
+            wal_dir: temp_wal.path().to_path_buf(),
+            snapshots_dir: temp_snapshots.path().to_path_buf(),
             max_wals: 5,
             max_snapshots: 3,
             snapshot_intervals_secs: 60,
             cleanup_interval_secs: 60,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_storage_manager_new() {
-        let config = mock_storage_config();
+        };
+        
         let storage_manager = StorageManager::new(config).await;
 
         assert!(storage_manager.is_ok(), "Failed to create StorageManager");
@@ -248,7 +251,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_operation() {
-        let config = mock_storage_config();
+        use tempfile::TempDir;
+        
+        // Create temporary directories for test isolation
+        let temp_wal = TempDir::new().unwrap();
+        let temp_snapshots = TempDir::new().unwrap();
+        
+        let config = StorageConfig {
+            wal_dir: temp_wal.path().to_path_buf(),
+            snapshots_dir: temp_snapshots.path().to_path_buf(),
+            max_wals: 5,
+            max_snapshots: 3,
+            snapshot_intervals_secs: 60,
+            cleanup_interval_secs: 60,
+        };
+        
         let storage_manager = StorageManager::new(config).await.unwrap();
 
         let meta = ContainerMeta {
@@ -270,7 +287,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_update_status() {
-        let config = mock_storage_config();
+        use tempfile::TempDir;
+        
+        // Create temporary directories for test isolation
+        let temp_wal = TempDir::new().unwrap();
+        let temp_snapshots = TempDir::new().unwrap();
+        
+        let config = StorageConfig {
+            wal_dir: temp_wal.path().to_path_buf(),
+            snapshots_dir: temp_snapshots.path().to_path_buf(),
+            max_wals: 5,
+            max_snapshots: 3,
+            snapshot_intervals_secs: 60,
+            cleanup_interval_secs: 60,
+        };
+        
         let storage_manager = StorageManager::new(config).await.unwrap();
 
         let op = StorageOperation::UpdateStatus {
@@ -287,7 +318,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_delete_operation() {
-        let config = mock_storage_config();
+        use tempfile::TempDir;
+        
+        // Create temporary directories for test isolation
+        let temp_wal = TempDir::new().unwrap();
+        let temp_snapshots = TempDir::new().unwrap();
+        
+        let config = StorageConfig {
+            wal_dir: temp_wal.path().to_path_buf(),
+            snapshots_dir: temp_snapshots.path().to_path_buf(),
+            max_wals: 5,
+            max_snapshots: 3,
+            snapshot_intervals_secs: 60,
+            cleanup_interval_secs: 60,
+        };
+        
         let storage_manager = StorageManager::new(config).await.unwrap();
 
         let op = StorageOperation::Delete("container1".to_string());

@@ -58,7 +58,29 @@ impl BridgeDriver {
         network: &Network,
         endpoint: &Endpoint,
     ) -> anyhow::Result<Ipv4Addr> {
-        unimplemented!()
+        // Create veth pair
+        self.create_veth_pair(&endpoint.veth_host, &endpoint.veth_peer)
+            .await
+            .context("Failed to create veth pair")?;
+
+        // Add host veth to bridge
+        self.add_to_bridge(&endpoint.veth_host, &network.name)
+            .await
+            .context("Failed to add veth to bridge")?;
+
+        // Set host veth up
+        self.set_link_up(&endpoint.veth_host)
+            .await
+            .context("Failed to set host veth up")?;
+
+        // Move peer veth to container netns
+        // Note: container_id should be the PID of the container process
+        let netns_path = format!("/proc/{}/ns/net", endpoint.container_id);
+        self.move_to_netns(&endpoint.veth_peer, &netns_path)
+            .await
+            .context("Failed to move veth to container netns")?;
+
+        Ok(endpoint.container_ip)
     }
 
     async fn create_bridge(&self, name: &str) -> anyhow::Result<()> {

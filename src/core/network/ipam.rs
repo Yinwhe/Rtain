@@ -67,7 +67,7 @@ impl IPAM {
     }
 
     pub fn allocate_gateway(&mut self, cidr: &str) -> anyhow::Result<Ipv4Addr> {
-        self.allocate_specific_ip(cidr, 1)
+        self.allocate_specific_ip(cidr, 0)
     }
 
     fn allocate_specific_ip(&mut self, cidr: &str, index: u32) -> anyhow::Result<Ipv4Addr> {
@@ -156,4 +156,108 @@ where
         subnets.insert(cidr, bitvec);
     }
     Ok(subnets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn test_ipam_basic_operations() {
+        let mut ipam = IPAM::empty();
+        
+        // Test adding subnet
+        assert!(ipam.add_subnet("192.168.1.0/24").is_ok());
+        
+        // Test adding duplicate subnet
+        assert!(ipam.add_subnet("192.168.1.0/24").is_err());
+    }
+
+    #[test]
+    fn test_ip_allocation() {
+        let mut ipam = IPAM::empty();
+        ipam.add_subnet("192.168.1.0/24").unwrap();
+        
+        // Test gateway allocation (should be .1)
+        let gateway = ipam.allocate_gateway("192.168.1.0/24").unwrap();
+        assert_eq!(gateway, Ipv4Addr::new(192, 168, 1, 1));
+        
+        // Test normal IP allocation (should be .2 since .1 is taken)
+        let ip1 = ipam.allocate_ip("192.168.1.0/24").unwrap();
+        assert_eq!(ip1, Ipv4Addr::new(192, 168, 1, 2));
+        
+        // Test another allocation
+        let ip2 = ipam.allocate_ip("192.168.1.0/24").unwrap();
+        assert_eq!(ip2, Ipv4Addr::new(192, 168, 1, 3));
+    }
+
+    #[test]
+    fn test_ip_release() {
+        let mut ipam = IPAM::empty();
+        ipam.add_subnet("192.168.1.0/24").unwrap();
+        
+        let ip = ipam.allocate_ip("192.168.1.0/24").unwrap();
+        
+        // Release the IP
+        assert!(ipam.release_ip("192.168.1.0/24", ip).is_ok());
+        
+        // Try to release again (should fail)
+        assert!(ipam.release_ip("192.168.1.0/24", ip).is_err());
+        
+        // Allocate again (should get the same IP)
+        let ip2 = ipam.allocate_ip("192.168.1.0/24").unwrap();
+        assert_eq!(ip, ip2);
+    }
+
+    #[test]
+    fn test_parse_cidr() {
+        assert_eq!(
+            IPAM::parse_cidr("192.168.1.0/24").unwrap(),
+            (Ipv4Addr::new(192, 168, 1, 0), 24)
+        );
+        
+        assert_eq!(
+            IPAM::parse_cidr("10.0.0.0/8").unwrap(),
+            (Ipv4Addr::new(10, 0, 0, 0), 8)
+        );
+        
+        // Invalid CIDR
+        assert!(IPAM::parse_cidr("invalid").is_err());
+        assert!(IPAM::parse_cidr("192.168.1.0/33").is_err());
+    }
+
+    #[test]
+    fn test_calculate_ip() {
+        // 192.168.1.0/24 + index 1 = 192.168.1.1
+        assert_eq!(
+            IPAM::calculate_ip("192.168.1.0/24", 1).unwrap(),
+            Ipv4Addr::new(192, 168, 1, 1)
+        );
+        
+        // 10.0.0.0/16 + index 256 = 10.0.1.0
+        assert_eq!(
+            IPAM::calculate_ip("10.0.0.0/16", 256).unwrap(),
+            Ipv4Addr::new(10, 0, 1, 0)
+        );
+    }
+
+    #[test]
+    fn test_small_subnet() {
+        let mut ipam = IPAM::empty();
+        
+        // /30 subnet has only 2 usable IPs (4 total - 2 reserved)
+        ipam.add_subnet("192.168.1.0/30").unwrap();
+        
+        let ip1 = ipam.allocate_ip("192.168.1.0/30").unwrap();
+        let _ip2 = ipam.allocate_ip("192.168.1.0/30").unwrap();
+        
+        // Third allocation should fail
+        assert!(ipam.allocate_ip("192.168.1.0/30").is_err());
+        
+        // Release one and try again
+        ipam.release_ip("192.168.1.0/30", ip1).unwrap();
+        let ip3 = ipam.allocate_ip("192.168.1.0/30").unwrap();
+        assert_eq!(ip1, ip3);
+    }
 }

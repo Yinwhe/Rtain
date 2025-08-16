@@ -96,7 +96,12 @@ async fn exec_prepare(meta: &ContainerMeta) -> anyhow::Result<(OpenptyResult, St
     let mut buf = [0u8; 4];
 
     // Create a new process in the container ns.
-    let child = match exec_container_process(meta.get_pid().unwrap(), c_sock, &pty, &meta.command) {
+    let container_pid = match meta.get_pid() {
+        Some(pid) => pid,
+        None => return Err(anyhow::anyhow!("Container is not running")),
+    };
+    
+    let child = match exec_container_process(container_pid, c_sock, &pty, &meta.command) {
         Ok(child) => child,
         Err(e) => {
             return Err(e);
@@ -160,6 +165,9 @@ fn exec_container_process(
             return -1;
         }
 
+        // SAFETY: fork() is used to create a child process that will execute 
+        // commands in the container namespace. This is a standard pattern 
+        // for container exec implementations.
         match unsafe { fork() } {
             Err(e) => {
                 c_sock.write(b"EXIT").unwrap();
@@ -230,6 +238,9 @@ fn enter_ns(pid: i32) -> anyhow::Result<()> {
         let nspath = format!("/proc/{}/ns/{}", pid, ns);
         let fd = open(nspath.as_str(), OFlag::O_RDONLY, Mode::empty())?;
 
+        // SAFETY: BorrowedFd::borrow_raw is used to create a borrowed file descriptor
+        // from the raw fd. This is safe as long as the fd is valid (which it is, 
+        // since open() succeeded) and we don't use it after it's closed.
         setns(unsafe { BorrowedFd::borrow_raw(fd) }, CloneFlags::empty())?;
     }
 

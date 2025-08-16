@@ -47,7 +47,14 @@ pub async fn run_container(run_args: RunArgs, mut stream: UnixStream) {
         }
     };
 
-    let pid = Pid::from_raw(meta.get_pid().unwrap());
+    let pid = match meta.get_pid() {
+        Some(pid) => Pid::from_raw(pid),
+        None => {
+            error!("Container meta doesn't have a valid PID");
+            let _ = Msg::Err("Container is not running".to_string()).send_to(&mut stream).await;
+            return;
+        }
+    };
     do_run(meta.name, meta.id, pid, pty, sock, stream, detach, true).await;
 }
 
@@ -224,12 +231,26 @@ pub async fn do_run(
 
                                 info!("[Daemon] {}", msg);
                             }
-                            _ => unimplemented!("Waitpid status: {:?}", status),
+                            _ => {
+                                let msg = format!("Container exited with unexpected status: {:?}", status);
+                                if let Err(e) = stream_writer.lock().await.write_all(msg.as_bytes()).await {
+                                    error!("[Daemon] Failed to write to stream: {}", e);
+                                }
+                                error!("[Daemon] {}", msg);
+                            }
                         }
                     }
-                    Err(e) => unimplemented!("Waitpid error: {:?}", e),
+                    Err(e) => {
+                        let msg = format!("Error waiting for container: {:?}", e);
+                        if let Err(e) = stream_writer.lock().await.write_all(msg.as_bytes()).await {
+                            error!("[Daemon] Failed to write to stream: {}", e);
+                        }
+                        error!("[Daemon] {}", msg);
+                    }
                 };
-                stream_writer.lock().await.shutdown().await.unwrap();
+                if let Err(e) = stream_writer.lock().await.shutdown().await {
+                    error!("[Daemon] Failed to shutdown stream: {}", e);
+                }
             }
         }
     } else {
@@ -294,7 +315,11 @@ async fn run_prepare(
     };
 
     // Wait for child ready.
-    p_sock.read_exact(&mut buf).unwrap();
+    if let Err(e) = p_sock.read_exact(&mut buf) {
+        let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
+        return Err(anyhow::anyhow!("Failed to read from child process: {}", e));
+    }
+    
     match &buf {
         b"EXIT" => {
             // Child failed to initialize, clean up.
@@ -305,14 +330,20 @@ async fn run_prepare(
             ));
         }
         b"WAIT" => {}
-        _ => unreachable!(),
+        _ => {
+            let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
+            return Err(anyhow::anyhow!(
+                "Unexpected message from child process: {:?}", 
+                std::str::from_utf8(&buf).unwrap_or("invalid utf8")
+            ));
+        }
     }
 
     // Setting up cgroups
     let cg = match setup_cgroup(&name_id, child) {
         Ok(cg) => cg,
         Err(e) => {
-            p_sock.write(b"EXIT").unwrap();
+            let _ = p_sock.write(b"EXIT");
             let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
 
             return Err(anyhow::anyhow!("Failed to setup cgroup: {:?}", e));
@@ -322,8 +353,17 @@ async fn run_prepare(
     // Form the container record.
     let cm = ContainerMeta::new(name, id, child.as_raw(), run_args.command);
 
-    if let Err(e) = CONTAINER_METAS.get().unwrap().register(cm.clone()).await {
-        p_sock.write(b"EXIT").unwrap();
+    let container_metas = match CONTAINER_METAS.get() {
+        Some(metas) => metas,
+        None => {
+            let _ = p_sock.write(b"EXIT");
+            let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
+            return Err(anyhow::anyhow!("Container metas not initialized"));
+        }
+    };
+    
+    if let Err(e) = container_metas.register(cm.clone()).await {
+        let _ = p_sock.write(b"EXIT");
         let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
         let _ = cg.delete();
 
@@ -362,7 +402,13 @@ pub fn new_container_process(
         | CloneFlags::CLONE_NEWNET
         | CloneFlags::CLONE_NEWIPC;
     const STACK_SIZE: usize = 1 * 1024 * 1024;
+    // Use Box to ensure heap allocation and proper alignment
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];
+    
+    // Ensure stack is properly sized
+    if child_stack.len() < STACK_SIZE {
+        return Err(anyhow::anyhow!("Failed to allocate stack memory"));
+    }
 
     let child_func = || {
         let setup_stdio = || -> anyhow::Result<()> {
@@ -417,7 +463,14 @@ pub fn new_container_process(
     };
 
     // This new process will run `child_func`
-    let child_pid = unsafe { clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) }?;
+    // SAFETY: 
+    // - child_stack is properly allocated with sufficient size (1MB)
+    // - child_func is a valid function that will be executed in the new process
+    // - flags are valid CloneFlags for creating namespaces
+    // - SIGCHLD is used for proper parent-child relationship
+    let child_pid = unsafe { 
+        clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) 
+    }.map_err(|e| anyhow::anyhow!("Failed to clone process: {:?}", e))?;
 
     Ok(child_pid)
 }

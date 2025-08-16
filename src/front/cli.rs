@@ -15,7 +15,10 @@ async fn run_client() -> tokio::io::Result<()> {
     let mut stream = UnixStream::connect(SOCKET_PATH).await?;
 
     let cli = CLI::parse();
-    Msg::Req(cli.clone()).send_to(&mut stream).await.unwrap();
+    if let Err(e) = Msg::Req(cli.clone()).send_to(&mut stream).await {
+        eprintln!("Failed to send request to daemon: {}", e);
+        return Err(e);
+    }
 
     match cli.command {
         Commands::Run(run_args) => client_run_container(run_args, stream).await,
@@ -27,7 +30,9 @@ async fn run_client() -> tokio::io::Result<()> {
         Commands::Logs(logs_args) => client_show_logs(logs_args, stream).await,
         Commands::Commit(commit_args) => client_commit_container(commit_args, stream).await,
         Commands::Network(network_commands) => match network_commands {
-            _ => unimplemented!(),
+            crate::core::NetworkCommands::Create(netcreate_args) => {
+                client_create_network(netcreate_args, stream).await
+            }
         },
     }
 
@@ -35,7 +40,15 @@ async fn run_client() -> tokio::io::Result<()> {
 }
 
 pub fn client() {
-    if let Err(e) = Runtime::new().unwrap().block_on(run_client()) {
+    let runtime = match Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("Failed to create tokio runtime: {}", e);
+            exit(-1);
+        }
+    };
+    
+    if let Err(e) = runtime.block_on(run_client()) {
         eprintln!("Error: {}", e);
         exit(-1)
     } else {
