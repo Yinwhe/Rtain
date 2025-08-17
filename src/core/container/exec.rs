@@ -56,7 +56,7 @@ pub async fn exec_container(exec_args: ExecArgs, mut stream: UnixStream) {
         }
     };
 
-    if !meta.status.is_running() {
+    if !meta.state.status.is_running() {
         error!(
             "Failed to exec container {}, it's not running",
             exec_args.name

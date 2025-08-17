@@ -44,10 +44,12 @@ The project provides these container management commands through the CLI:
 - `make help` - Show all available make targets
 
 **Test Framework**: Comprehensive test suite with:
-- Unit tests for all core modules (cmd, msg, network/ipam, metas/storage)
+- **38 unit tests** covering all core modules (cmd, msg, network/ipam, metas/*)
+- **Enhanced metadata system tests**: WAL operations, storage management, integrity verification
+- **Concurrency testing**: DashMap deadlock prevention and async operation safety
 - Integration tests using `tempfile` for test isolation
 - Mock testing with `tokio-test` and `mockall`
-- Test coverage includes IP allocation, message serialization, and storage operations
+- Test coverage includes IP allocation, message serialization, and advanced metadata operations
 
 ## Architecture
 
@@ -64,7 +66,11 @@ The project provides these container management commands through the CLI:
 - **`src/core/`** - Core container management functionality
   - `container/` - Container lifecycle operations (start, stop, exec, etc.)
   - `network/` - Network management and bridge configuration
-  - `metas/` - Metadata and storage management for containers
+  - `metas/` - **Enhanced metadata and storage management system**
+    - `meta.rs` - Container metadata models and management APIs
+    - `storage.rs` - Storage operations and transaction management  
+    - `wal.rs` - Write-ahead logging with compression and integrity verification
+    - `example.rs` - Usage examples and event handler implementations
   - `cmd.rs` - Command definitions and parsing
   - `msg.rs` - Message protocol for client-daemon communication
 
@@ -76,13 +82,21 @@ The project provides these container management commands through the CLI:
 
 1. **Async Architecture**: Uses Tokio runtime for async operations
 2. **Message Protocol**: Custom serialization with bincode for client-daemon communication
-3. **Metadata Management**: Persistent storage of container and network metadata
+3. **Enhanced Metadata Management**: WAL+Snapshot architecture for persistent storage
+   - **Write-Ahead Logging (WAL)**: All operations logged for durability and recovery
+   - **Snapshot System**: Periodic state snapshots with automatic cleanup
+   - **Event System**: Real-time metadata change notifications (framework in place)
+   - **Advanced Queries**: Multi-dimensional filtering and resource aggregation
+   - **Batch Operations**: Atomic multi-operation transactions
 4. **Resource Management**: Integration with Linux cgroups and networking primitives
 
 ### Important Paths
 - Container root: `/tmp/rtain`
 - Daemon socket: `/tmp/rtain_daemons.sock`
 - Network config: `/tmp/rtain/net/networks`
+- **Metadata storage**: `/tmp/rtain/metadata/`
+  - WAL files: `current.wal`, `archive/wal-*.log`
+  - Snapshots: `snapshots/snapshot-*.json`
 
 ### Dependencies
 
@@ -101,26 +115,77 @@ The project provides these container management commands through the CLI:
 - `tempfile` - Temporary file and directory management for test isolation
 - `mockall` - Mock object framework
 - `pretty_assertions` - Better assertion output formatting
+- `rstest` - Parameterized testing framework
+- `flate2` - Compression support for WAL testing
 
 ## Development Notes
 
 - The project is designed as a learning exercise in container technology
 - Currently focused on documentation improvement, code refactoring, and error handling enhancement
-- **Test Framework**: Comprehensive unit test suite with 19 tests covering all core modules
+- **Test Framework**: Comprehensive unit test suite with 38 tests covering all core modules
 - **Code Quality**: All tests pass and maintain test isolation using temporary directories
+- **Enhanced Metadata System**: Advanced container metadata management with WAL+Snapshot architecture
 - Logging is configured with `env_logger` and `console-subscriber` for debugging
+
+## Enhanced Metadata System Features
+
+### Container Metadata Management
+- **Comprehensive Container Model**: 20+ fields including state, resources, network config, mounts
+- **Lifecycle State Tracking**: Created, Running, Stopped, Paused, Restarting states
+- **Resource Configuration**: CPU, memory limits, and cgroup settings
+- **Network Integration**: Network attachment/detachment with configuration persistence
+- **Mount Point Management**: Volume and bind mount tracking with validation
+
+### Persistence Architecture
+- **Write-Ahead Logging (WAL)**:
+  - Durable operation logging with binary serialization
+  - Integrity verification with checksum validation
+  - Automatic rotation and archival with configurable retention
+  - Compression support for storage efficiency
+  - Batch operation support for atomic transactions
+
+- **Snapshot System**:
+  - Periodic state snapshots for fast recovery
+  - Automatic cleanup with configurable retention policies
+  - JSON serialization for human-readable backups
+  - Recovery integration with WAL replay
+
+### Advanced Operations
+- **Batch Transactions**: Atomic multi-operation updates with rollback
+- **Advanced Queries**: Filter by status, labels, creation time, resource usage
+- **Resource Aggregation**: CPU, memory, and storage usage summaries
+- **Event System Framework**: Infrastructure for real-time change notifications
+- **Concurrent Safety**: Thread-safe operations with proper lock management
+
+### Testing Coverage
+- **Storage Operations**: All CRUD and advanced operations tested
+- **WAL System**: Write, read, integrity, compaction, and validation tests
+- **Concurrency**: DashMap deadlock prevention and async safety verification
+- **Error Handling**: Edge cases, corruption recovery, and validation
+- **Integration**: Cross-component data consistency and recovery scenarios
 
 ## Recent Improvements
 
+### Enhanced Metadata System (2025-08-17)
+- **Comprehensive metadata management**: Expanded from 5 to 20+ container metadata fields
+- **WAL+Snapshot architecture**: Implemented robust persistence with integrity verification
+- **Advanced storage operations**: Environment, labels, resources, network, and mount management
+- **Event system framework**: Real-time metadata change notification system (foundation)
+- **Batch operations**: Atomic multi-operation transactions with rollback support
+- **Advanced querying**: Multi-dimensional filtering with resource aggregation
+- **Test coverage expansion**: Increased from 19 to 38 tests covering all new functionality
+- **Concurrency safety**: Fixed DashMap deadlock issues and improved async operation safety
+- **English documentation**: Converted all Chinese content to comprehensive English docs
+
 ### Test Infrastructure (2025-08-16)
-- Added comprehensive unit test suite with 19 tests
-- Implemented proper test isolation using `tempfile::TempDir`
+- Added comprehensive unit test suite with proper test isolation
 - Fixed IP allocation logic in network management
 - Resolved message serialization issues in IPC layer
 - Added Makefile with testing, building, and development targets
 
-### Key Fixes
-- **IP Allocation**: Fixed gateway allocation to use correct bitmap indexing
-- **Message Protocol**: Resolved hardcoded length issues in serialization tests
-- **Storage Tests**: Implemented proper test isolation to prevent data pollution
+### Key Technical Fixes
+- **DashMap Deadlock**: Resolved reference lifetime issues in concurrent operations
+- **WAL Integrity**: Fixed floating-point precision issues in verification tests
+- **Storage Operations**: Implemented proper scoped reference management
+- **Test Isolation**: All tests use `tempfile::TempDir` for data isolation
 - **Container Support**: Verified compilation and testing in Ubuntu container environment

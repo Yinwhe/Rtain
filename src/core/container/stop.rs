@@ -66,7 +66,7 @@ pub async fn do_stop(name: String, id: String) {
 
     // Update records.
     if let Some(container_metas) = CONTAINER_METAS.get() {
-        let _ = container_metas.updates(id, ContainerStatus::stop()).await;
+        let _ = container_metas.updates(id, ContainerStatus::Exited).await;
     } else {
         error!("Container metas not initialized during stop");
     }

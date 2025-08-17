@@ -351,7 +351,13 @@ async fn run_prepare(
     };
 
     // Form the container record.
-    let cm = ContainerMeta::new(name, id, child.as_raw(), run_args.command);
+    let cm = ContainerMeta::new(
+        id.clone(),
+        name.clone(), 
+        run_args.image.clone(),
+        run_args.command.clone(),
+        vec![] // No args field in RunArgs, use empty vector
+    );
 
     let container_metas = match CONTAINER_METAS.get() {
         Some(metas) => metas,

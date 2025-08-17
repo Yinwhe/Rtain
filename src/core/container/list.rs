@@ -23,7 +23,7 @@ pub async fn list_containers(_ps_args: PSArgs, mut stream: UnixStream) {
             meta.name,
             meta.get_pid().unwrap_or(0),
             meta.command.join(" "),
-            meta.status
+            meta.state.status
         );
     }
 

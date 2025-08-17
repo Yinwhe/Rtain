@@ -7,7 +7,7 @@ use tokio::{
 };
 
 use super::{
-    meta::{ContainerMeta, ContainerStatus, InnerState},
+    meta::{ContainerMeta, ContainerStatus, ContainerState, InnerState, NetworkConfig, ResourceConfig, MountPoint, MountType, MetadataEvent, MetadataEventHandler},
     snapshot::Snapshotter,
     wal::WalManager,
 };
@@ -24,12 +24,21 @@ pub struct StorageConfig {
     pub cleanup_interval_secs: u64,
 }
 
-#[derive(Debug)]
 pub struct StorageManager {
     op_sender: Arc<Mutex<mpsc::Sender<(StorageOperation, oneshot::Sender<anyhow::Result<()>>)>>>,
     inner: Arc<Mutex<StorageInner>>,
     #[allow(unused)]
     worker: JoinHandle<()>,
+}
+
+impl std::fmt::Debug for StorageManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageManager")
+            .field("op_sender", &"Arc<Mutex<Sender>>")
+            .field("inner", &self.inner)
+            .field("worker", &"JoinHandle<()>")
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -42,9 +51,29 @@ struct StorageInner {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StorageOperation {
+    // Basic operations
     Create(ContainerMeta),
-    UpdateStatus { id: String, status: ContainerStatus },
     Delete(String),
+    
+    // Fine-grained status updates
+    UpdateStatus { id: String, status: ContainerStatus },
+    UpdateState { id: String, state: ContainerState },
+    
+    // Configuration updates
+    UpdateEnvironment { id: String, env: std::collections::HashMap<String, String> },
+    UpdateLabels { id: String, labels: std::collections::HashMap<String, String> },
+    UpdateResources { id: String, resources: ResourceConfig },
+    
+    // Network operations
+    AttachNetwork { id: String, network: NetworkConfig },
+    DetachNetwork { id: String },
+    
+    // Mount operations
+    AddMount { id: String, mount: MountPoint },
+    RemoveMount { id: String, destination: String },
+    
+    // Batch operations
+    Batch(Vec<StorageOperation>),
 }
 
 impl StorageManager {
@@ -214,6 +243,66 @@ impl StorageManager {
             .map(|meta| meta.clone())
             .collect()
     }
+
+    // Event system support
+    // Event handler methods temporarily removed for compilation
+    // TODO: Implement event system properly
+    
+    async fn operation_to_event(&self, op: &StorageOperation) -> Option<MetadataEvent> {
+        match op {
+            StorageOperation::Create(meta) => Some(MetadataEvent::ContainerCreated {
+                id: meta.id.clone(),
+                name: meta.name.clone(),
+            }),
+            StorageOperation::Delete(id) => {
+                if let Some(meta) = self.get_meta_by_id(id).await {
+                    Some(MetadataEvent::ContainerDeleted {
+                        id: id.clone(),
+                        name: meta.name,
+                    })
+                } else {
+                    None
+                }
+            },
+            StorageOperation::UpdateStatus { id, status } => {
+                if let Some(meta) = self.get_meta_by_id(id).await {
+                    Some(MetadataEvent::StatusChanged {
+                        id: id.clone(),
+                        name: meta.name,
+                        old_status: meta.state.status,
+                        new_status: status.clone(),
+                    })
+                } else {
+                    None
+                }
+            },
+            StorageOperation::UpdateResources { id, resources } => {
+                Some(MetadataEvent::ResourcesUpdated {
+                    id: id.clone(),
+                    resources: resources.clone(),
+                })
+            },
+            StorageOperation::AttachNetwork { id, network } => {
+                Some(MetadataEvent::NetworkAttached {
+                    id: id.clone(),
+                    network: network.clone(),
+                })
+            },
+            // Event conversion for other operations
+            _ => None,
+        }
+    }
+
+    // Enhanced WAL functionality
+    pub async fn compact_wal(&self, snapshot_index: u64) -> anyhow::Result<()> {
+        let inner = self.inner.lock().await;
+        inner.wal.compact(snapshot_index).await
+    }
+    
+    pub async fn verify_wal_integrity(&self) -> anyhow::Result<super::wal::IntegrityReport> {
+        let inner = self.inner.lock().await;
+        inner.wal.verify_integrity().await
+    }
 }
 
 #[cfg(test)]
@@ -268,16 +357,13 @@ mod tests {
         
         let storage_manager = StorageManager::new(config).await.unwrap();
 
-        let meta = ContainerMeta {
-            id: "container1".to_string(),
-            name: "test_container".to_string(),
-            command: vec!["/bin/bash".to_string()],
-            status: ContainerStatus::Running {
-                pid: 1234,
-                started_at: 1625238290,
-            },
-            created_at: 1625238290,
-        };
+        let meta = ContainerMeta::new(
+            "container1".to_string(),
+            "test_container".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
 
         let op = StorageOperation::Create(meta);
         let result = storage_manager.execute(op).await;
@@ -306,9 +392,7 @@ mod tests {
 
         let op = StorageOperation::UpdateStatus {
             id: "container1".to_string(),
-            status: ContainerStatus::Stopped {
-                stopped_at: 1625238390,
-            },
+            status: ContainerStatus::Exited,
         };
 
         let result = storage_manager.execute(op).await;
@@ -346,16 +430,13 @@ mod tests {
     async fn test_inner_state_apply_create_operation() {
         let state = InnerState::default();
 
-        let meta = ContainerMeta {
-            id: "container1".to_string(),
-            name: "test_container".to_string(),
-            command: vec!["/bin/bash".to_string()],
-            status: ContainerStatus::Running {
-                pid: 1234,
-                started_at: 1625238290,
-            },
-            created_at: 1625238290,
-        };
+        let meta = ContainerMeta::new(
+            "container1".to_string(),
+            "test_container".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
 
         let op = StorageOperation::Create(meta.clone());
 
@@ -377,23 +458,18 @@ mod tests {
     async fn test_inner_state_apply_update_status() {
         let state = InnerState::default();
 
-        let meta = ContainerMeta {
-            id: "container1".to_string(),
-            name: "test_container".to_string(),
-            command: vec!["/bin/bash".to_string()],
-            status: ContainerStatus::Running {
-                pid: 1234,
-                started_at: 1625238290,
-            },
-            created_at: 1625238290,
-        };
+        let meta = ContainerMeta::new(
+            "container1".to_string(),
+            "test_container".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
 
         let op = StorageOperation::Create(meta.clone());
         state.apply_operation(op).unwrap();
 
-        let new_status = ContainerStatus::Stopped {
-            stopped_at: 1625238390,
-        };
+        let new_status = ContainerStatus::Exited;
         let update_op = StorageOperation::UpdateStatus {
             id: meta.id.clone(),
             status: new_status.clone(),
@@ -404,7 +480,7 @@ mod tests {
         assert!(result.is_ok(), "Failed to apply update status operation");
 
         if let Some(updated_meta) = state.by_id.get(&meta.id) {
-            assert_eq!(updated_meta.status, new_status, "Status update failed");
+            assert_eq!(updated_meta.state.status, new_status, "Status update failed");
         } else {
             panic!("Container not found after status update");
         };
@@ -414,16 +490,13 @@ mod tests {
     async fn test_inner_state_apply_delete_operation() {
         let state = InnerState::default();
 
-        let meta = ContainerMeta {
-            id: "container1".to_string(),
-            name: "test_container".to_string(),
-            command: vec!["/bin/bash".to_string()],
-            status: ContainerStatus::Running {
-                pid: 1234,
-                started_at: 1625238290,
-            },
-            created_at: 1625238290,
-        };
+        let meta = ContainerMeta::new(
+            "container1".to_string(),
+            "test_container".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
 
         let op = StorageOperation::Create(meta.clone());
         state.apply_operation(op).unwrap();
@@ -442,5 +515,222 @@ mod tests {
             !state.by_name.contains_key(&meta.name),
             "Container was not removed from by_name map"
         );
+    }
+
+    #[tokio::test]
+    async fn test_new_storage_operations_step_by_step() {
+        println!("Step 1: Creating state");
+        let state = InnerState::default();
+
+        let mut meta = ContainerMeta::new(
+            "container1".to_string(),
+            "test_container".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
+        meta.env.insert("TEST_VAR".to_string(), "value".to_string());
+        meta.labels.insert("app".to_string(), "test".to_string());
+
+        // Create container
+        state.apply_operation(StorageOperation::Create(meta.clone())).unwrap();
+
+        // Test environment variable updates
+        let new_env = [("NEW_VAR".to_string(), "new_value".to_string())].into();
+        let update_env_op = StorageOperation::UpdateEnvironment {
+            id: meta.id.clone(),
+            env: new_env,
+        };
+        state.apply_operation(update_env_op).unwrap();
+
+        // Verify environment update - use scoped block to release reference
+        {
+            let updated = state.by_id.get(&meta.id).unwrap();
+            assert_eq!(updated.env.get("NEW_VAR"), Some(&"new_value".to_string()));
+        } // Reference is dropped here
+
+        // Test label updates
+        let new_labels = [("version".to_string(), "1.0".to_string())].into();
+        let update_labels_op = StorageOperation::UpdateLabels {
+            id: meta.id.clone(),
+            labels: new_labels,
+        };
+        state.apply_operation(update_labels_op).unwrap();
+
+        // Verify labels update - use scoped block to release reference
+        {
+            let updated = state.by_id.get(&meta.id).unwrap();
+            assert_eq!(updated.labels.get("version"), Some(&"1.0".to_string()));
+        } // Reference is dropped here
+
+        // Test resource configuration updates
+        let resources = ResourceConfig {
+            memory_limit: Some(512 * 1024 * 1024),
+            cpu_limit: Some(1.5),
+            pids_limit: Some(1000),
+            disk_limit: None,
+        };
+        let update_resources_op = StorageOperation::UpdateResources {
+            id: meta.id.clone(),
+            resources: resources.clone(),
+        };
+        state.apply_operation(update_resources_op).unwrap();
+
+        // Verify resources update - use scoped block to release reference
+        {
+            let updated = state.by_id.get(&meta.id).unwrap();
+            assert_eq!(updated.resources.memory_limit, Some(512 * 1024 * 1024));
+            assert_eq!(updated.resources.cpu_limit, Some(1.5));
+        } // Reference is dropped here
+
+        // Test network operations
+        let network = NetworkConfig {
+            ip_address: Some("172.17.0.2".to_string()),
+            network_name: "bridge".to_string(),
+            mac_address: Some("02:42:ac:11:00:02".to_string()),
+            ports: [(80, 8080)].into(),
+        };
+        let attach_network_op = StorageOperation::AttachNetwork {
+            id: meta.id.clone(),
+            network: network.clone(),
+        };
+        state.apply_operation(attach_network_op).unwrap();
+
+        // Verify network attach - use scoped block to release reference
+        {
+            let updated = state.by_id.get(&meta.id).unwrap();
+            assert!(updated.network.is_some());
+            assert_eq!(updated.network.as_ref().unwrap().ip_address, Some("172.17.0.2".to_string()));
+        } // Reference is dropped here
+
+        // Test network detachment
+        let detach_network_op = StorageOperation::DetachNetwork {
+            id: meta.id.clone(),
+        };
+        state.apply_operation(detach_network_op).unwrap();
+
+        // Verify network detach - use scoped block to release reference
+        {
+            let updated = state.by_id.get(&meta.id).unwrap();
+            assert!(updated.network.is_none());
+        } // Reference is dropped here
+
+        // Test adding mount point
+        let mount = MountPoint {
+            source: "/host/data".to_string(),
+            destination: "/app/data".to_string(),
+            mount_type: MountType::Bind,
+            read_only: false,
+        };
+        let add_mount_op = StorageOperation::AddMount {
+            id: meta.id.clone(),
+            mount: mount.clone(),
+        };
+        state.apply_operation(add_mount_op).unwrap();
+
+        // Verify mount add - use scoped block to release reference
+        {
+            let updated = state.by_id.get(&meta.id).unwrap();
+            assert_eq!(updated.mounts.len(), 1);
+            assert_eq!(updated.mounts[0].destination, "/app/data");
+        } // Reference is dropped here
+
+        // Test removing mount point
+        let remove_mount_op = StorageOperation::RemoveMount {
+            id: meta.id.clone(),
+            destination: "/app/data".to_string(),
+        };
+        state.apply_operation(remove_mount_op).unwrap();
+        
+        // Verify mount removal - use scoped block to release reference
+        {
+            let updated = state.by_id.get(&meta.id).unwrap();
+            assert_eq!(updated.mounts.len(), 0);
+        } // Reference is dropped here
+    }
+
+    #[tokio::test]
+    async fn test_labels_operation_isolated() {
+        println!("Testing isolated labels operation");
+        let state = InnerState::default();
+
+        // Create container first
+        let meta = ContainerMeta::new(
+            "container1".to_string(),
+            "test_container".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
+        
+        println!("Creating container...");
+        state.apply_operation(StorageOperation::Create(meta.clone())).unwrap();
+        
+        println!("Container created, testing labels update...");
+        
+        // Test ONLY the labels update that seems to be problematic
+        let new_labels = [("version".to_string(), "1.0".to_string())].into();
+        let update_labels_op = StorageOperation::UpdateLabels {
+            id: meta.id.clone(),
+            labels: new_labels,
+        };
+        
+        println!("About to call apply_operation for UpdateLabels...");
+        state.apply_operation(update_labels_op).unwrap();
+        println!("UpdateLabels completed successfully!");
+
+        let updated = state.by_id.get(&meta.id).unwrap();
+        assert_eq!(updated.labels.get("version"), Some(&"1.0".to_string()));
+        println!("Test completed successfully!");
+    }
+
+    #[tokio::test]
+    async fn test_batch_operations() {
+        let state = InnerState::default();
+
+        let meta1 = ContainerMeta::new(
+            "container1".to_string(),
+            "test_container1".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
+
+        let meta2 = ContainerMeta::new(
+            "container2".to_string(),
+            "test_container2".to_string(),
+            "ubuntu:latest".to_string(),
+            vec!["/bin/bash".to_string()],
+            vec![],
+        );
+
+        // Batch create and update
+        let batch_ops = vec![
+            StorageOperation::Create(meta1.clone()),
+            StorageOperation::Create(meta2.clone()),
+            StorageOperation::UpdateStatus {
+                id: meta1.id.clone(),
+                status: ContainerStatus::Running,
+            },
+            StorageOperation::UpdateStatus {
+                id: meta2.id.clone(),
+                status: ContainerStatus::Running,
+            },
+        ];
+
+        let batch_op = StorageOperation::Batch(batch_ops);
+        let result = state.apply_operation(batch_op);
+
+        assert!(result.is_ok(), "Failed to apply batch operation");
+
+        // Verify operation results
+        assert!(state.by_id.contains_key(&meta1.id));
+        assert!(state.by_id.contains_key(&meta2.id));
+
+        let stored_meta1 = state.by_id.get(&meta1.id).unwrap();
+        let stored_meta2 = state.by_id.get(&meta2.id).unwrap();
+
+        assert_eq!(stored_meta1.state.status, ContainerStatus::Running);
+        assert_eq!(stored_meta2.state.status, ContainerStatus::Running);
     }
 }

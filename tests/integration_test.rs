@@ -1,7 +1,7 @@
-use std::net::Ipv4Addr;
+// use std::net::Ipv4Addr;  // Unused for now
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
-use rtain::core::{Msg, CLI, Commands, PSArgs, NetCreateArgs, NetworkCommands};
+use rtain::{Msg, CLI, Commands, PSArgs, NetCreateArgs, NetworkCommands};
 
 /// Integration test for client-server communication
 #[tokio::test]

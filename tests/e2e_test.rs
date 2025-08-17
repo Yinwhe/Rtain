@@ -1,6 +1,6 @@
 use std::process::Command;
-use std::time::Duration;
-use tokio::time::sleep;
+// use std::time::Duration;  // Unused for now
+// use tokio::time::sleep;   // Unused for now
 
 /// End-to-end test helpers and utilities
 /// 
@@ -107,7 +107,7 @@ mod linux_tests {
     }
 
     fn is_root() -> bool {
-        unsafe { libc::geteuid() == 0 }
+        unsafe { nix::libc::geteuid() == 0 }
     }
 }
 

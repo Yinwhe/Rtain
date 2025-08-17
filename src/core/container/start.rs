@@ -42,7 +42,7 @@ pub async fn start_container(start_args: StartArgs, mut stream: UnixStream) {
         }
     };
 
-    if meta.status.is_running() {
+    if meta.state.status.is_running() {
         error!(
             "Failed to start container {}, it's already running",
             &start_args.name
@@ -126,7 +126,7 @@ async fn start_prepare(
     if let Err(e) = CONTAINER_METAS
         .get()
         .unwrap()
-        .updates(meta.id.clone(), ContainerStatus::running(child.as_raw()))
+        .updates(meta.id.clone(), ContainerStatus::Running)
         .await
     {
         error!("Failed to update container status: {:?}", e);

@@ -24,7 +24,7 @@ pub async fn remove_container(rm_args: RMArgs, mut stream: UnixStream) {
         }
     };
 
-    if meta.status.is_running() {
+    if meta.state.status.is_running() {
         error!(
             "Failed to rm container {}, it's still running",
             &rm_args.name
