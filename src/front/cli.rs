@@ -47,7 +47,7 @@ pub fn client() {
             exit(-1);
         }
     };
-    
+
     if let Err(e) = runtime.block_on(run_client()) {
         eprintln!("Error: {}", e);
         exit(-1)

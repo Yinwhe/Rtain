@@ -7,7 +7,10 @@ use tokio::{
 };
 
 use super::{
-    meta::{ContainerMeta, ContainerStatus, ContainerState, InnerState, NetworkConfig, ResourceConfig, MountPoint, MountType, MetadataEvent, MetadataEventHandler},
+    meta::{
+        ContainerMeta, ContainerState, ContainerStatus, InnerState, MetadataEvent,
+        MetadataEventHandler, MountPoint, MountType, NetworkConfig, ResourceConfig,
+    },
     snapshot::Snapshotter,
     wal::WalManager,
 };
@@ -54,24 +57,50 @@ pub enum StorageOperation {
     // Basic operations
     Create(ContainerMeta),
     Delete(String),
-    
+
     // Fine-grained status updates
-    UpdateStatus { id: String, status: ContainerStatus },
-    UpdateState { id: String, state: ContainerState },
-    
+    UpdateStatus {
+        id: String,
+        status: ContainerStatus,
+    },
+    UpdateState {
+        id: String,
+        state: ContainerState,
+    },
+
     // Configuration updates
-    UpdateEnvironment { id: String, env: std::collections::HashMap<String, String> },
-    UpdateLabels { id: String, labels: std::collections::HashMap<String, String> },
-    UpdateResources { id: String, resources: ResourceConfig },
-    
+    UpdateEnvironment {
+        id: String,
+        env: std::collections::HashMap<String, String>,
+    },
+    UpdateLabels {
+        id: String,
+        labels: std::collections::HashMap<String, String>,
+    },
+    UpdateResources {
+        id: String,
+        resources: ResourceConfig,
+    },
+
     // Network operations
-    AttachNetwork { id: String, network: NetworkConfig },
-    DetachNetwork { id: String },
-    
+    AttachNetwork {
+        id: String,
+        network: NetworkConfig,
+    },
+    DetachNetwork {
+        id: String,
+    },
+
     // Mount operations
-    AddMount { id: String, mount: MountPoint },
-    RemoveMount { id: String, destination: String },
-    
+    AddMount {
+        id: String,
+        mount: MountPoint,
+    },
+    RemoveMount {
+        id: String,
+        destination: String,
+    },
+
     // Batch operations
     Batch(Vec<StorageOperation>),
 }
@@ -247,7 +276,7 @@ impl StorageManager {
     // Event system support
     // Event handler methods temporarily removed for compilation
     // TODO: Implement event system properly
-    
+
     async fn operation_to_event(&self, op: &StorageOperation) -> Option<MetadataEvent> {
         match op {
             StorageOperation::Create(meta) => Some(MetadataEvent::ContainerCreated {
@@ -263,7 +292,7 @@ impl StorageManager {
                 } else {
                     None
                 }
-            },
+            }
             StorageOperation::UpdateStatus { id, status } => {
                 if let Some(meta) = self.get_meta_by_id(id).await {
                     Some(MetadataEvent::StatusChanged {
@@ -275,19 +304,19 @@ impl StorageManager {
                 } else {
                     None
                 }
-            },
+            }
             StorageOperation::UpdateResources { id, resources } => {
                 Some(MetadataEvent::ResourcesUpdated {
                     id: id.clone(),
                     resources: resources.clone(),
                 })
-            },
+            }
             StorageOperation::AttachNetwork { id, network } => {
                 Some(MetadataEvent::NetworkAttached {
                     id: id.clone(),
                     network: network.clone(),
                 })
-            },
+            }
             // Event conversion for other operations
             _ => None,
         }
@@ -298,7 +327,7 @@ impl StorageManager {
         let inner = self.inner.lock().await;
         inner.wal.compact(snapshot_index).await
     }
-    
+
     pub async fn verify_wal_integrity(&self) -> anyhow::Result<super::wal::IntegrityReport> {
         let inner = self.inner.lock().await;
         inner.wal.verify_integrity().await
@@ -309,15 +338,14 @@ impl StorageManager {
 mod tests {
     use super::*;
 
-
     #[tokio::test]
     async fn test_storage_manager_new() {
         use tempfile::TempDir;
-        
+
         // Create temporary directories for test isolation
         let temp_wal = TempDir::new().unwrap();
         let temp_snapshots = TempDir::new().unwrap();
-        
+
         let config = StorageConfig {
             wal_dir: temp_wal.path().to_path_buf(),
             snapshots_dir: temp_snapshots.path().to_path_buf(),
@@ -326,7 +354,7 @@ mod tests {
             snapshot_intervals_secs: 60,
             cleanup_interval_secs: 60,
         };
-        
+
         let storage_manager = StorageManager::new(config).await;
 
         assert!(storage_manager.is_ok(), "Failed to create StorageManager");
@@ -341,11 +369,11 @@ mod tests {
     #[tokio::test]
     async fn test_execute_create_operation() {
         use tempfile::TempDir;
-        
+
         // Create temporary directories for test isolation
         let temp_wal = TempDir::new().unwrap();
         let temp_snapshots = TempDir::new().unwrap();
-        
+
         let config = StorageConfig {
             wal_dir: temp_wal.path().to_path_buf(),
             snapshots_dir: temp_snapshots.path().to_path_buf(),
@@ -354,7 +382,7 @@ mod tests {
             snapshot_intervals_secs: 60,
             cleanup_interval_secs: 60,
         };
-        
+
         let storage_manager = StorageManager::new(config).await.unwrap();
 
         let meta = ContainerMeta::new(
@@ -374,11 +402,11 @@ mod tests {
     #[tokio::test]
     async fn test_execute_update_status() {
         use tempfile::TempDir;
-        
+
         // Create temporary directories for test isolation
         let temp_wal = TempDir::new().unwrap();
         let temp_snapshots = TempDir::new().unwrap();
-        
+
         let config = StorageConfig {
             wal_dir: temp_wal.path().to_path_buf(),
             snapshots_dir: temp_snapshots.path().to_path_buf(),
@@ -387,7 +415,7 @@ mod tests {
             snapshot_intervals_secs: 60,
             cleanup_interval_secs: 60,
         };
-        
+
         let storage_manager = StorageManager::new(config).await.unwrap();
 
         let op = StorageOperation::UpdateStatus {
@@ -403,11 +431,11 @@ mod tests {
     #[tokio::test]
     async fn test_execute_delete_operation() {
         use tempfile::TempDir;
-        
+
         // Create temporary directories for test isolation
         let temp_wal = TempDir::new().unwrap();
         let temp_snapshots = TempDir::new().unwrap();
-        
+
         let config = StorageConfig {
             wal_dir: temp_wal.path().to_path_buf(),
             snapshots_dir: temp_snapshots.path().to_path_buf(),
@@ -416,7 +444,7 @@ mod tests {
             snapshot_intervals_secs: 60,
             cleanup_interval_secs: 60,
         };
-        
+
         let storage_manager = StorageManager::new(config).await.unwrap();
 
         let op = StorageOperation::Delete("container1".to_string());
@@ -480,7 +508,10 @@ mod tests {
         assert!(result.is_ok(), "Failed to apply update status operation");
 
         if let Some(updated_meta) = state.by_id.get(&meta.id) {
-            assert_eq!(updated_meta.state.status, new_status, "Status update failed");
+            assert_eq!(
+                updated_meta.state.status, new_status,
+                "Status update failed"
+            );
         } else {
             panic!("Container not found after status update");
         };
@@ -533,7 +564,9 @@ mod tests {
         meta.labels.insert("app".to_string(), "test".to_string());
 
         // Create container
-        state.apply_operation(StorageOperation::Create(meta.clone())).unwrap();
+        state
+            .apply_operation(StorageOperation::Create(meta.clone()))
+            .unwrap();
 
         // Test environment variable updates
         let new_env = [("NEW_VAR".to_string(), "new_value".to_string())].into();
@@ -600,7 +633,10 @@ mod tests {
         {
             let updated = state.by_id.get(&meta.id).unwrap();
             assert!(updated.network.is_some());
-            assert_eq!(updated.network.as_ref().unwrap().ip_address, Some("172.17.0.2".to_string()));
+            assert_eq!(
+                updated.network.as_ref().unwrap().ip_address,
+                Some("172.17.0.2".to_string())
+            );
         } // Reference is dropped here
 
         // Test network detachment
@@ -641,7 +677,7 @@ mod tests {
             destination: "/app/data".to_string(),
         };
         state.apply_operation(remove_mount_op).unwrap();
-        
+
         // Verify mount removal - use scoped block to release reference
         {
             let updated = state.by_id.get(&meta.id).unwrap();
@@ -662,19 +698,21 @@ mod tests {
             vec!["/bin/bash".to_string()],
             vec![],
         );
-        
+
         println!("Creating container...");
-        state.apply_operation(StorageOperation::Create(meta.clone())).unwrap();
-        
+        state
+            .apply_operation(StorageOperation::Create(meta.clone()))
+            .unwrap();
+
         println!("Container created, testing labels update...");
-        
+
         // Test ONLY the labels update that seems to be problematic
         let new_labels = [("version".to_string(), "1.0".to_string())].into();
         let update_labels_op = StorageOperation::UpdateLabels {
             id: meta.id.clone(),
             labels: new_labels,
         };
-        
+
         println!("About to call apply_operation for UpdateLabels...");
         state.apply_operation(update_labels_op).unwrap();
         println!("UpdateLabels completed successfully!");

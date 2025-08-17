@@ -59,13 +59,13 @@ mod tests {
         let cli = CLI {
             command: crate::core::Commands::PS(crate::core::PSArgs { all: false }),
         };
-        
+
         let msg = Msg::Req(cli.clone());
         assert!(msg.get_req().is_some());
-        
+
         let ok_msg = Msg::Ok;
         assert!(ok_msg.get_req().is_none());
-        
+
         let err_msg = Msg::Err("test error".to_string());
         assert!(err_msg.get_req().is_none());
     }
@@ -75,7 +75,7 @@ mod tests {
         let cli = CLI {
             command: crate::core::Commands::PS(crate::core::PSArgs { all: false }),
         };
-        
+
         // Test different message types
         let messages = vec![
             Msg::Req(cli),
@@ -88,14 +88,14 @@ mod tests {
         for original_msg in messages {
             // Serialize
             let serialized = bincode::serialize(&original_msg).unwrap();
-            
+
             // Deserialize
             let deserialized: Msg = bincode::deserialize(&serialized).unwrap();
-            
+
             // Compare (would need PartialEq trait for exact comparison)
             match (&original_msg, &deserialized) {
-                (Msg::Ok, Msg::Ok) => {},
-                (Msg::Continue, Msg::Continue) => {},
+                (Msg::Ok, Msg::Ok) => {}
+                (Msg::Continue, Msg::Continue) => {}
                 (Msg::Err(e1), Msg::Err(e2)) => assert_eq!(e1, e2),
                 (Msg::OkContent(c1), Msg::OkContent(c2)) => assert_eq!(c1, c2),
                 _ => {}
@@ -109,7 +109,7 @@ mod tests {
         let serialized_msg = bincode::serialize(&test_msg).unwrap();
         let msg_len = serialized_msg.len() as u64;
         let len_bytes = msg_len.to_le_bytes();
-        
+
         // Create a mock stream
         let mut mock_stream = Builder::new()
             .write(&len_bytes) // length header
@@ -120,10 +120,10 @@ mod tests {
 
         // Test send
         test_msg.send_to(&mut mock_stream).await.unwrap();
-        
+
         // Test receive
         let received_msg = Msg::recv_from(&mut mock_stream).await.unwrap();
-        
+
         match received_msg {
             Msg::OkContent(content) => assert_eq!(content, "test message"),
             _ => panic!("Expected OkContent message"),

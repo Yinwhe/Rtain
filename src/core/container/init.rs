@@ -51,7 +51,9 @@ pub async fn run_container(run_args: RunArgs, mut stream: UnixStream) {
         Some(pid) => Pid::from_raw(pid),
         None => {
             error!("Container meta doesn't have a valid PID");
-            let _ = Msg::Err("Container is not running".to_string()).send_to(&mut stream).await;
+            let _ = Msg::Err("Container is not running".to_string())
+                .send_to(&mut stream)
+                .await;
             return;
         }
     };
@@ -319,7 +321,7 @@ async fn run_prepare(
         let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
         return Err(anyhow::anyhow!("Failed to read from child process: {}", e));
     }
-    
+
     match &buf {
         b"EXIT" => {
             // Child failed to initialize, clean up.
@@ -333,7 +335,7 @@ async fn run_prepare(
         _ => {
             let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
             return Err(anyhow::anyhow!(
-                "Unexpected message from child process: {:?}", 
+                "Unexpected message from child process: {:?}",
                 std::str::from_utf8(&buf).unwrap_or("invalid utf8")
             ));
         }
@@ -353,10 +355,10 @@ async fn run_prepare(
     // Form the container record.
     let cm = ContainerMeta::new(
         id.clone(),
-        name.clone(), 
+        name.clone(),
         run_args.image.clone(),
         run_args.command.clone(),
-        vec![] // No args field in RunArgs, use empty vector
+        vec![], // No args field in RunArgs, use empty vector
     );
 
     let container_metas = match CONTAINER_METAS.get() {
@@ -367,7 +369,7 @@ async fn run_prepare(
             return Err(anyhow::anyhow!("Container metas not initialized"));
         }
     };
-    
+
     if let Err(e) = container_metas.register(cm.clone()).await {
         let _ = p_sock.write(b"EXIT");
         let _ = delete_workspace(&root_path, &mnt_path, &run_args.volume).await;
@@ -410,7 +412,7 @@ pub fn new_container_process(
     const STACK_SIZE: usize = 1 * 1024 * 1024;
     // Use Box to ensure heap allocation and proper alignment
     let mut child_stack: Vec<u8> = vec![0; STACK_SIZE];
-    
+
     // Ensure stack is properly sized
     if child_stack.len() < STACK_SIZE {
         return Err(anyhow::anyhow!("Failed to allocate stack memory"));
@@ -469,14 +471,13 @@ pub fn new_container_process(
     };
 
     // This new process will run `child_func`
-    // SAFETY: 
+    // SAFETY:
     // - child_stack is properly allocated with sufficient size (1MB)
     // - child_func is a valid function that will be executed in the new process
     // - flags are valid CloneFlags for creating namespaces
     // - SIGCHLD is used for proper parent-child relationship
-    let child_pid = unsafe { 
-        clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) 
-    }.map_err(|e| anyhow::anyhow!("Failed to clone process: {:?}", e))?;
+    let child_pid = unsafe { clone(Box::new(child_func), &mut child_stack, flags, Some(SIGCHLD)) }
+        .map_err(|e| anyhow::anyhow!("Failed to clone process: {:?}", e))?;
 
     Ok(child_pid)
 }

@@ -5,14 +5,14 @@ mod wal;
 
 pub mod example;
 
-use tokio::sync::OnceCell;
 pub use meta::{
-    ContainerManager, ContainerMeta, ContainerStatus, ContainerState,
-    HealthStatus, NetworkConfig, ResourceConfig, MountPoint, MountType,
-    ContainerFilter, ResourceSummary, MetadataEvent, MetadataEventHandler
+    ContainerFilter, ContainerManager, ContainerMeta, ContainerState, ContainerStatus,
+    HealthStatus, MetadataEvent, MetadataEventHandler, MountPoint, MountType, NetworkConfig,
+    ResourceConfig, ResourceSummary,
 };
 pub use storage::{StorageConfig, StorageManager, StorageOperation};
-pub use wal::{WalManager, IntegrityReport, WalError};
+use tokio::sync::OnceCell;
+pub use wal::{IntegrityReport, WalError, WalManager};
 
 pub fn current_time() -> u64 {
     std::time::SystemTime::now()
@@ -29,14 +29,14 @@ impl ContainerFilter {
             ..Default::default()
         }
     }
-    
+
     pub fn by_label(key: &str, value: &str) -> Self {
         Self {
             labels: [(key.to_string(), value.to_string())].into(),
             ..Default::default()
         }
     }
-    
+
     pub fn recent(hours: u64) -> Self {
         Self {
             since: Some(current_time() - hours * 3600),

@@ -104,7 +104,7 @@ pub fn daemon() {
             return;
         }
     };
-    
+
     if let Err(e) = runtime.block_on(run_daemon()) {
         eprintln!("Error: {}", e);
     }

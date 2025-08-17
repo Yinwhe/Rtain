@@ -3,7 +3,7 @@ use std::process::Command;
 // use tokio::time::sleep;   // Unused for now
 
 /// End-to-end test helpers and utilities
-/// 
+///
 /// Note: These tests require Linux and root privileges to run properly
 /// They test the actual container functionality
 
@@ -79,7 +79,10 @@ mod linux_tests {
 
         let help_text = String::from_utf8_lossy(&help_output.stdout);
         assert!(help_text.contains("rtain"), "Help should mention rtain");
-        assert!(help_text.contains("container"), "Help should mention containers");
+        assert!(
+            help_text.contains("container"),
+            "Help should mention containers"
+        );
     }
 
     /// Test CLI commands (without daemon running)
@@ -100,7 +103,7 @@ mod linux_tests {
 
         // Should exit with error code since daemon is not running
         assert!(!ps_output.status.success(), "PS should fail without daemon");
-        
+
         let stderr = String::from_utf8_lossy(&ps_output.stderr);
         // Should contain some kind of connection error message
         assert!(!stderr.is_empty(), "Should have error message");

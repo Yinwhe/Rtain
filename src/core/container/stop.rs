@@ -21,11 +21,8 @@ pub async fn stop_container(stop_args: StopArgs, mut stream: UnixStream) {
             return;
         }
     };
-    
-    let meta = match container_metas
-        .get_meta_by_name(&stop_args.name)
-        .await
-    {
+
+    let meta = match container_metas.get_meta_by_name(&stop_args.name).await {
         Some(meta) => meta,
         None => {
             error!(

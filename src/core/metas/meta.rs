@@ -12,13 +12,13 @@ use super::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ContainerStatus {
-    Creating,     // Being created
-    Running,      // Currently running
-    Paused,       // Paused
-    Restarting,   // Restarting
-    Removing,     // Being removed
-    Exited,       // Has exited
-    Dead,         // Dead (cannot operate)
+    Creating,   // Being created
+    Running,    // Currently running
+    Paused,     // Paused
+    Restarting, // Restarting
+    Removing,   // Being removed
+    Exited,     // Has exited
+    Dead,       // Dead (cannot operate)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,16 +51,16 @@ pub struct NetworkConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceConfig {
-    pub memory_limit: Option<u64>,    // bytes
-    pub cpu_limit: Option<f64>,       // cores
+    pub memory_limit: Option<u64>, // bytes
+    pub cpu_limit: Option<f64>,    // cores
     pub pids_limit: Option<u64>,
     pub disk_limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MountPoint {
-    pub source: String,        // host path
-    pub destination: String,   // container path  
+    pub source: String,      // host path
+    pub destination: String, // container path
     pub mount_type: MountType,
     pub read_only: bool,
 }
@@ -79,27 +79,27 @@ pub struct ContainerMeta {
     pub name: String,
     pub created_at: u64,
     pub updated_at: u64,
-    
+
     // Configuration information
     pub image: String,
     pub command: Vec<String>,
     pub args: Vec<String>,
     pub working_dir: Option<String>,
     pub user: Option<String>,
-    
+
     // Environment and labels
     pub env: HashMap<String, String>,
     pub labels: HashMap<String, String>,
-    
+
     // State information
     pub state: ContainerState,
-    
+
     // Network information
     pub network: Option<NetworkConfig>,
-    
+
     // Resource configuration
     pub resources: ResourceConfig,
-    
+
     // Mount information
     pub mounts: Vec<MountPoint>,
 }
@@ -120,9 +120,7 @@ impl ContainerManager {
     pub async fn new(config: StorageConfig) -> anyhow::Result<Self> {
         let storage = StorageManager::new(config).await?;
 
-        Ok(Self { 
-            storage,
-        })
+        Ok(Self { storage })
     }
 
     pub async fn default() -> anyhow::Result<Self> {
@@ -155,43 +153,46 @@ impl ContainerManager {
     // Enhanced query functionality
     pub async fn list_containers(&self, filter: Option<ContainerFilter>) -> Vec<ContainerMeta> {
         let all_metas = self.storage.get_all_metas().await;
-        
+
         let Some(filter) = filter else {
             return all_metas;
         };
-        
-        let mut filtered: Vec<_> = all_metas.into_iter()
+
+        let mut filtered: Vec<_> = all_metas
+            .into_iter()
             .filter(|meta| filter.matches(meta))
             .collect();
-        
+
         if let Some(limit) = filter.limit {
             filtered.truncate(limit);
         }
-        
+
         filtered
     }
-    
+
     pub async fn get_containers_by_status(&self, status: ContainerStatus) -> Vec<ContainerMeta> {
         self.list_containers(Some(ContainerFilter {
             status: Some(status),
             ..Default::default()
-        })).await
+        }))
+        .await
     }
-    
+
     pub async fn get_containers_by_label(&self, key: &str, value: &str) -> Vec<ContainerMeta> {
         self.list_containers(Some(ContainerFilter {
             labels: [(key.to_string(), value.to_string())].into(),
             ..Default::default()
-        })).await
+        }))
+        .await
     }
-    
+
     // Statistics
     pub async fn get_resource_summary(&self) -> ResourceSummary {
         let containers = self.storage.get_all_metas().await;
-        
+
         let mut summary = ResourceSummary::default();
         summary.total_count = containers.len();
-        
+
         for container in &containers {
             // Resource statistics
             if let Some(memory) = container.resources.memory_limit {
@@ -200,17 +201,18 @@ impl ContainerManager {
             if let Some(cpu) = container.resources.cpu_limit {
                 summary.total_cpu += cpu;
             }
-            
+
             // Status statistics
-            *summary.containers_by_status
+            *summary
+                .containers_by_status
                 .entry(container.state.status.clone())
                 .or_insert(0) += 1;
-            
+
             if container.state.status.is_running() {
                 summary.running_count += 1;
             }
         }
-        
+
         summary
     }
 
@@ -221,31 +223,47 @@ impl ContainerManager {
 
     // Batch operations
     pub async fn batch_update(&self, operations: Vec<StorageOperation>) -> anyhow::Result<()> {
-        self.storage.execute(StorageOperation::Batch(operations)).await
+        self.storage
+            .execute(StorageOperation::Batch(operations))
+            .await
     }
 
     // Event system support temporarily removed for compilation
     // TODO: Implement event system properly
 
     // Advanced container management methods
-    pub async fn update_container_resources(&self, id: String, resources: ResourceConfig) -> anyhow::Result<()> {
-        self.storage.execute(StorageOperation::UpdateResources { id, resources }).await
+    pub async fn update_container_resources(
+        &self,
+        id: String,
+        resources: ResourceConfig,
+    ) -> anyhow::Result<()> {
+        self.storage
+            .execute(StorageOperation::UpdateResources { id, resources })
+            .await
     }
 
     pub async fn attach_network(&self, id: String, network: NetworkConfig) -> anyhow::Result<()> {
-        self.storage.execute(StorageOperation::AttachNetwork { id, network }).await
+        self.storage
+            .execute(StorageOperation::AttachNetwork { id, network })
+            .await
     }
 
     pub async fn detach_network(&self, id: String) -> anyhow::Result<()> {
-        self.storage.execute(StorageOperation::DetachNetwork { id }).await
+        self.storage
+            .execute(StorageOperation::DetachNetwork { id })
+            .await
     }
 
     pub async fn add_mount(&self, id: String, mount: MountPoint) -> anyhow::Result<()> {
-        self.storage.execute(StorageOperation::AddMount { id, mount }).await
+        self.storage
+            .execute(StorageOperation::AddMount { id, mount })
+            .await
     }
 
     pub async fn remove_mount(&self, id: String, destination: String) -> anyhow::Result<()> {
-        self.storage.execute(StorageOperation::RemoveMount { id, destination }).await
+        self.storage
+            .execute(StorageOperation::RemoveMount { id, destination })
+            .await
     }
 
     // WAL management
@@ -276,11 +294,11 @@ impl ContainerManager {
 
 impl ContainerMeta {
     pub fn new(
-        id: String, 
-        name: String, 
+        id: String,
+        name: String,
         image: String,
         command: Vec<String>,
-        args: Vec<String>
+        args: Vec<String>,
     ) -> Self {
         let time = current_time();
         Self {
@@ -450,34 +468,34 @@ impl ContainerFilter {
                 return false;
             }
         }
-        
+
         // Label filtering
         for (key, value) in &self.labels {
             if meta.labels.get(key) != Some(value) {
                 return false;
             }
         }
-        
+
         // Name pattern matching
         if let Some(ref pattern) = self.name_pattern {
             if !meta.name.contains(pattern) {
                 return false;
             }
         }
-        
+
         // Time range filtering
         if let Some(since) = self.since {
             if meta.created_at < since {
                 return false;
             }
         }
-        
+
         if let Some(until) = self.until {
             if meta.created_at > until {
                 return false;
             }
         }
-        
+
         true
     }
 }
@@ -495,26 +513,41 @@ pub struct ResourceSummary {
 // Event definitions
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MetadataEvent {
-    ContainerCreated { id: String, name: String },
-    ContainerDeleted { id: String, name: String },
-    StatusChanged { 
-        id: String, 
+    ContainerCreated {
+        id: String,
         name: String,
-        old_status: ContainerStatus, 
-        new_status: ContainerStatus 
     },
-    ResourcesUpdated { id: String, resources: ResourceConfig },
-    NetworkAttached { id: String, network: NetworkConfig },
-    HealthChanged { 
-        id: String, 
-        old_health: HealthStatus, 
-        new_health: HealthStatus 
+    ContainerDeleted {
+        id: String,
+        name: String,
+    },
+    StatusChanged {
+        id: String,
+        name: String,
+        old_status: ContainerStatus,
+        new_status: ContainerStatus,
+    },
+    ResourcesUpdated {
+        id: String,
+        resources: ResourceConfig,
+    },
+    NetworkAttached {
+        id: String,
+        network: NetworkConfig,
+    },
+    HealthChanged {
+        id: String,
+        old_health: HealthStatus,
+        new_health: HealthStatus,
     },
 }
 
 // Event handler
 pub trait MetadataEventHandler: Send + Sync {
-    fn handle(&self, event: MetadataEvent) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
+    fn handle(
+        &self,
+        event: MetadataEvent,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 }
 
 #[cfg(test)]
@@ -546,7 +579,10 @@ mod tests {
     }
 
     impl MetadataEventHandler for TestEventHandler {
-        fn handle(&self, event: MetadataEvent) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        fn handle(
+            &self,
+            event: MetadataEvent,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
             Box::pin(async move {
                 self.events.lock().unwrap().push(event);
             })
@@ -773,7 +809,10 @@ mod tests {
         assert_eq!(retrieved_by_name.unwrap().id, meta.id);
 
         // Update status
-        manager.updates(meta.id.clone(), ContainerStatus::Running).await.unwrap();
+        manager
+            .updates(meta.id.clone(), ContainerStatus::Running)
+            .await
+            .unwrap();
         let updated = manager.get_meta_by_id(&meta.id).await.unwrap();
         assert_eq!(updated.state.status, ContainerStatus::Running);
 
@@ -808,7 +847,9 @@ mod tests {
             vec![],
         );
         web_container.state.status = ContainerStatus::Running;
-        web_container.labels.insert("app".to_string(), "web".to_string());
+        web_container
+            .labels
+            .insert("app".to_string(), "web".to_string());
         web_container.resources.memory_limit = Some(512 * 1024 * 1024);
         web_container.resources.cpu_limit = Some(1.0);
 
@@ -820,7 +861,9 @@ mod tests {
             vec![],
         );
         db_container.state.status = ContainerStatus::Exited;
-        db_container.labels.insert("app".to_string(), "db".to_string());
+        db_container
+            .labels
+            .insert("app".to_string(), "db".to_string());
         db_container.resources.memory_limit = Some(1024 * 1024 * 1024);
         db_container.resources.cpu_limit = Some(2.0);
 
@@ -829,11 +872,15 @@ mod tests {
         manager.register(db_container).await.unwrap();
 
         // Test query by status
-        let running_containers = manager.get_containers_by_status(ContainerStatus::Running).await;
+        let running_containers = manager
+            .get_containers_by_status(ContainerStatus::Running)
+            .await;
         assert_eq!(running_containers.len(), 1);
         assert_eq!(running_containers[0].name, "web-server");
 
-        let stopped_containers = manager.get_containers_by_status(ContainerStatus::Exited).await;
+        let stopped_containers = manager
+            .get_containers_by_status(ContainerStatus::Exited)
+            .await;
         assert_eq!(stopped_containers.len(), 1);
         assert_eq!(stopped_containers[0].name, "database");
 
@@ -852,8 +899,14 @@ mod tests {
         assert_eq!(summary.running_count, 1);
         assert_eq!(summary.total_memory, 1536 * 1024 * 1024); // 512MB + 1024MB
         assert_eq!(summary.total_cpu, 3.0); // 1.0 + 2.0
-        assert_eq!(summary.containers_by_status.get(&ContainerStatus::Running), Some(&1));
-        assert_eq!(summary.containers_by_status.get(&ContainerStatus::Exited), Some(&1));
+        assert_eq!(
+            summary.containers_by_status.get(&ContainerStatus::Running),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.containers_by_status.get(&ContainerStatus::Exited),
+            Some(&1)
+        );
 
         // Test complex filtering
         let filter = ContainerFilter {

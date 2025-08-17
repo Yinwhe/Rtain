@@ -106,16 +106,16 @@ impl WalManager {
             .into_iter()
             .skip_while(|(index, _)| *index <= snapshot_index)
             .collect();
-            
+
         self.rewrite_wal(filtered_entries).await
     }
-    
+
     // Support WAL replay verification
     pub async fn verify_integrity(&self) -> anyhow::Result<IntegrityReport> {
         let operations = self.read_all_operations().await?;
         let mut report = IntegrityReport::default();
         report.total_operations = operations.len();
-        
+
         for (index, op) in operations {
             if let Err(e) = self.validate_operation(&op) {
                 report.errors.push(WalError {
@@ -125,10 +125,10 @@ impl WalManager {
                 });
             }
         }
-        
+
         Ok(report)
     }
-    
+
     // Read all operations with indices
     pub async fn read_all_operations(&self) -> anyhow::Result<Vec<(u64, StorageOperation)>> {
         let data = match tokio::fs::read(&self.current_path).await {
@@ -161,11 +161,11 @@ impl WalManager {
 
         Ok(operations)
     }
-    
+
     // Rewrite WAL file
     async fn rewrite_wal(&self, operations: Vec<(u64, StorageOperation)>) -> anyhow::Result<()> {
         let temp_path = self.current_path.with_extension("wal.tmp");
-        
+
         {
             let mut file = tokio::fs::OpenOptions::new()
                 .create(true)
@@ -173,7 +173,7 @@ impl WalManager {
                 .truncate(true)
                 .open(&temp_path)
                 .await?;
-            
+
             for (_, op) in operations {
                 let serialized_op = bincode::serialize(&op)?;
                 let length = serialized_op.len() as u64;
@@ -181,11 +181,11 @@ impl WalManager {
                 file.write_all(&serialized_op).await?;
             }
         }
-        
+
         tokio::fs::rename(temp_path, &self.current_path).await?;
         Ok(())
     }
-    
+
     // Validate operation correctness
     fn validate_operation(&self, op: &StorageOperation) -> anyhow::Result<()> {
         match op {
@@ -194,9 +194,9 @@ impl WalManager {
                     return Err(anyhow::anyhow!("Container ID or name cannot be empty"));
                 }
             }
-            StorageOperation::UpdateStatus { id, .. } | 
-            StorageOperation::UpdateState { id, .. } |
-            StorageOperation::Delete(id) => {
+            StorageOperation::UpdateStatus { id, .. }
+            | StorageOperation::UpdateState { id, .. }
+            | StorageOperation::Delete(id) => {
                 if id.is_empty() {
                     return Err(anyhow::anyhow!("Container ID cannot be empty"));
                 }
@@ -230,11 +230,11 @@ impl IntegrityReport {
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
-    
+
     pub fn error_count(&self) -> usize {
         self.errors.len()
     }
-    
+
     pub fn success_rate(&self) -> f64 {
         if self.total_operations == 0 {
             return 1.0;
@@ -246,13 +246,15 @@ impl IntegrityReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use crate::core::metas::meta::*;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_wal_basic_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5).await.unwrap();
+        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5)
+            .await
+            .unwrap();
 
         // Test write operation
         let meta = ContainerMeta::new(
@@ -263,14 +265,14 @@ mod tests {
             vec![],
         );
         let op = StorageOperation::Create(meta);
-        
+
         let result = wal_manager.write_operation(&op).await;
         assert!(result.is_ok(), "Failed to write operation to WAL");
 
         // Test read operation
         let operations = wal_manager.read_operations().await.unwrap();
         assert_eq!(operations.len(), 1);
-        
+
         if let StorageOperation::Create(read_meta) = &operations[0] {
             assert_eq!(read_meta.id, "test_id");
             assert_eq!(read_meta.name, "test_container");
@@ -282,7 +284,9 @@ mod tests {
     #[tokio::test]
     async fn test_wal_multiple_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5).await.unwrap();
+        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5)
+            .await
+            .unwrap();
 
         // Write multiple operations
         let ops = vec![
@@ -317,7 +321,9 @@ mod tests {
     #[tokio::test]
     async fn test_wal_integrity_verification() {
         let temp_dir = TempDir::new().unwrap();
-        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5).await.unwrap();
+        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5)
+            .await
+            .unwrap();
 
         // Write valid operations
         let valid_ops = vec![
@@ -357,7 +363,9 @@ mod tests {
     #[tokio::test]
     async fn test_wal_compaction() {
         let temp_dir = TempDir::new().unwrap();
-        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5).await.unwrap();
+        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5)
+            .await
+            .unwrap();
 
         // Write multiple operations
         let ops = vec![
@@ -392,7 +400,7 @@ mod tests {
         // Verify compaction results
         let remaining_ops = wal_manager.read_operations().await.unwrap();
         assert_eq!(remaining_ops.len(), 1); // Only the last operation remains
-        
+
         if let StorageOperation::Delete(id) = &remaining_ops[0] {
             assert_eq!(id, "container1");
         } else {
@@ -403,7 +411,9 @@ mod tests {
     #[tokio::test]
     async fn test_wal_read_all_operations_with_indices() {
         let temp_dir = TempDir::new().unwrap();
-        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5).await.unwrap();
+        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5)
+            .await
+            .unwrap();
 
         // Write operations
         let ops = vec![
@@ -427,20 +437,25 @@ mod tests {
         // Read indexed operations
         let indexed_ops = wal_manager.read_all_operations().await.unwrap();
         assert_eq!(indexed_ops.len(), 2);
-        
+
         // Verify indices
         assert_eq!(indexed_ops[0].0, 0);
         assert_eq!(indexed_ops[1].0, 1);
-        
+
         // Verify operation types
         assert!(matches!(indexed_ops[0].1, StorageOperation::Create(_)));
-        assert!(matches!(indexed_ops[1].1, StorageOperation::UpdateStatus { .. }));
+        assert!(matches!(
+            indexed_ops[1].1,
+            StorageOperation::UpdateStatus { .. }
+        ));
     }
 
     #[tokio::test]
     async fn test_wal_validation() {
         let temp_dir = TempDir::new().unwrap();
-        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5).await.unwrap();
+        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5)
+            .await
+            .unwrap();
 
         // Test valid operations
         let valid_meta = ContainerMeta::new(
@@ -476,17 +491,16 @@ mod tests {
         assert!(wal_manager.validate_operation(&invalid_name_op).is_err());
 
         // Test batch operation validation
-        let batch_op = StorageOperation::Batch(vec![
-            valid_op,
-            invalid_op,
-        ]);
+        let batch_op = StorageOperation::Batch(vec![valid_op, invalid_op]);
         assert!(wal_manager.validate_operation(&batch_op).is_err());
     }
 
     #[tokio::test]
     async fn test_wal_empty_file() {
         let temp_dir = TempDir::new().unwrap();
-        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5).await.unwrap();
+        let wal_manager = WalManager::new(&temp_dir.path().to_path_buf(), 5)
+            .await
+            .unwrap();
 
         // Test reading non-existent file
         let operations = wal_manager.read_operations().await.unwrap();
